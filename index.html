@@ -1,0 +1,2684 @@
+import React, { useRef, useEffect, useState, useCallback } from 'react';
+import * as THREE from 'three';
+
+const SpaceFlightSimulator = () => {
+  const mountRef = useRef(null);
+  const sceneRef = useRef(null);
+  const rendererRef = useRef(null);
+  const cameraRef = useRef(null);
+  const cockpitCameraRef = useRef(null);
+  const shipRef = useRef(null);
+  const planetsRef = useRef({});
+  const moonsRef = useRef({});
+  const keysRef = useRef({});
+  const velocityRef = useRef(new THREE.Vector3());
+  const animationRef = useRef(null);
+  const particleSystemsRef = useRef({});
+  const timeRef = useRef(0);
+  const hazardsRef = useRef([]);
+  const radarTargetsRef = useRef([]);
+  const fbxLoaderRef = useRef(null);
+  const customModelRef = useRef(null);
+  
+  const [currentPlanet, setCurrentPlanet] = useState(null);
+  const [planetInfoVisible, setPlanetInfoVisible] = useState(true);
+  const [viewMode, setViewMode] = useState('external'); // 'external' or 'cockpit'
+  const [selectedShipType, setSelectedShipType] = useState('explorer');
+  const [autopilotTarget, setAutopilotTarget] = useState(null);
+  const [autopilotActive, setAutopilotActive] = useState(false);
+  const [environmentalWarnings, setEnvironmentalWarnings] = useState([]);
+  const [modelLoading, setModelLoading] = useState(false);
+  const [modelLoadError, setModelLoadError] = useState(null);
+  const [shipStats, setShipStats] = useState({
+    speed: 0,
+    position: { x: 0, y: 0, z: 0 },
+    fuel: 100,
+    hull: 100,
+    radiation: 0,
+    temperature: 20
+  });
+
+  // Ship configurations
+  const shipTypes = {
+    explorer: {
+      name: "Deep Space Explorer",
+      description: "Balanced ship for long-range exploration",
+      maxSpeed: 2.0,
+      acceleration: 0.020,
+      fuelCapacity: 150,
+      hullStrength: 120,
+      radiationShielding: 0.8,
+      color: 0xFFFFFF,
+      engineColor: 0x4488FF,
+      size: 1.0,
+      type: 'procedural'
+    },
+    fighter: {
+      name: "Hussam Zaid Fighter",
+      description: "Custom military fighter spacecraft",
+      maxSpeed: 3.5,
+      acceleration: 0.035,
+      fuelCapacity: 80,
+      hullStrength: 80,
+      radiationShielding: 0.6,
+      color: 0xFF4444,
+      engineColor: 0xFF6600,
+      size: 0.7,
+      type: 'custom',
+      modelUrl: 'https://github.com/dmaher42/Space/raw/refs/heads/main/Spaceship%20Hussam%20Zaid%20YouTube%20Channel.fbx'
+    },
+    cargo: {
+      name: "Heavy Cargo Hauler",
+      description: "Slow but durable transport ship",
+      maxSpeed: 1.2,
+      acceleration: 0.012,
+      fuelCapacity: 300,
+      hullStrength: 200,
+      radiationShielding: 0.9,
+      color: 0x888888,
+      engineColor: 0x00AA44,
+      size: 1.4,
+      type: 'procedural'
+    },
+    research: {
+      name: "Scientific Research Vessel",
+      description: "Advanced sensors and laboratory equipment",
+      maxSpeed: 1.8,
+      acceleration: 0.018,
+      fuelCapacity: 120,
+      hullStrength: 100,
+      radiationShielding: 0.95,
+      color: 0x00AAFF,
+      engineColor: 0xAA00FF,
+      size: 1.1,
+      type: 'procedural'
+    }
+  };
+
+  // Initialize FBX Loader
+  const initFBXLoader = useCallback(() => {
+    // Create FBX loader using CDN
+    if (!fbxLoaderRef.current) {
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/loaders/FBXLoader.js';
+      script.onload = () => {
+        if (window.THREE && window.THREE.FBXLoader) {
+          fbxLoaderRef.current = new window.THREE.FBXLoader();
+        }
+      };
+      document.head.appendChild(script);
+    }
+  }, []);
+
+  // Load custom FBX model
+  const loadCustomModel = useCallback(async (url, config) => {
+    return new Promise((resolve, reject) => {
+      if (!fbxLoaderRef.current) {
+        // Create a simple FBX loader since we can't use the CDN version
+        const loader = new THREE.LoadingManager();
+        
+        // For now, create a fallback model that looks similar to the original
+        const group = new THREE.Group();
+        
+        // Main hull - more detailed geometry
+        const hullGeometry = new THREE.BoxGeometry(3, 0.8, 6);
+        const hullMaterial = new THREE.MeshStandardMaterial({
+          color: 0x444444,
+          metalness: 0.8,
+          roughness: 0.3
+        });
+        const hull = new THREE.Mesh(hullGeometry, hullMaterial);
+        hull.position.y = 0;
+        group.add(hull);
+        
+        // Wings
+        const wingGeometry = new THREE.BoxGeometry(4, 0.3, 2);
+        const wingMaterial = new THREE.MeshStandardMaterial({
+          color: 0x666666,
+          metalness: 0.7,
+          roughness: 0.4
+        });
+        const leftWing = new THREE.Mesh(wingGeometry, wingMaterial);
+        leftWing.position.set(-2, 0, 1);
+        leftWing.rotation.z = 0.1;
+        group.add(leftWing);
+        
+        const rightWing = new THREE.Mesh(wingGeometry, wingMaterial);
+        rightWing.position.set(2, 0, 1);
+        rightWing.rotation.z = -0.1;
+        group.add(rightWing);
+        
+        // Cockpit area
+        const cockpitGeometry = new THREE.SphereGeometry(0.6, 16, 16);
+        const cockpitMaterial = new THREE.MeshStandardMaterial({
+          color: 0x88DDFF,
+          metalness: 0.1,
+          roughness: 0.1,
+          transparent: true,
+          opacity: 0.7
+        });
+        const cockpit = new THREE.Mesh(cockpitGeometry, cockpitMaterial);
+        cockpit.position.set(0, 0.3, -2);
+        cockpit.scale.z = 0.8;
+        group.add(cockpit);
+        
+        // Engine details
+        const engineGeometry = new THREE.CylinderGeometry(0.3, 0.4, 0.8, 8);
+        const engineMaterial = new THREE.MeshStandardMaterial({
+          color: config.engineColor,
+          metalness: 0.9,
+          roughness: 0.1,
+          emissive: config.engineColor,
+          emissiveIntensity: 0.3
+        });
+        
+        const leftEngine = new THREE.Mesh(engineGeometry, engineMaterial);
+        leftEngine.position.set(-1, 0, 2.5);
+        leftEngine.rotation.x = Math.PI / 2;
+        group.add(leftEngine);
+        
+        const rightEngine = new THREE.Mesh(engineGeometry, engineMaterial);
+        rightEngine.position.set(1, 0, 2.5);
+        rightEngine.rotation.x = Math.PI / 2;
+        group.add(rightEngine);
+        
+        // Scale the entire model
+        group.scale.setScalar(config.size * 0.3);
+        group.rotation.y = Math.PI; // Face forward
+        
+        customModelRef.current = group;
+        resolve(group);
+      } else {
+        // Use actual FBX loader when available
+        fbxLoaderRef.current.load(
+          url,
+          (model) => {
+            model.scale.setScalar(config.size * 0.01); // Scale down typical FBX models
+            model.rotation.y = Math.PI; // Face forward
+            
+            // Apply materials
+            model.traverse((child) => {
+              if (child.isMesh) {
+                child.material = new THREE.MeshStandardMaterial({
+                  color: config.color,
+                  metalness: 0.7,
+                  roughness: 0.3
+                });
+                child.castShadow = true;
+                child.receiveShadow = true;
+              }
+            });
+            
+            customModelRef.current = model;
+            resolve(model);
+          },
+          (progress) => {
+            console.log('Loading progress:', progress);
+          },
+          (error) => {
+            console.error('FBX loading error:', error);
+            reject(error);
+          }
+        );
+      }
+    });
+  }, []);
+
+  // Enhanced planet data
+  const planetData = {
+    sun: {
+      name: "The Sun",
+      distance: 0,
+      size: 8,
+      color: 0xFDB813,
+      emissive: 0xFFA500,
+      type: "star",
+      radiationLevel: 1.0,
+      temperature: 5778,
+      info: "The Sun is a yellow dwarf star that contains 99.86% of the Solar System's mass. Its core temperature reaches 15 million°C, creating the nuclear fusion that powers our solar system.",
+      facts: ["Age: 4.6 billion years", "Diameter: 1.39 million km", "Surface temp: 5,778K"],
+      moons: []
+    },
+    mercury: {
+      name: "Mercury",
+      distance: 25,
+      size: 0.8,
+      color: 0x8C7853,
+      type: "rocky",
+      radiationLevel: 0.8,
+      temperature: 167,
+      info: "Mercury is the smallest planet and closest to the Sun. It has extreme temperature variations, from 427°C during the day to -173°C at night.",
+      facts: ["Day length: 59 Earth days", "No atmosphere", "Heavily cratered surface"],
+      moons: []
+    },
+    venus: {
+      name: "Venus",
+      distance: 35,
+      size: 1.2,
+      color: 0xFFC649,
+      type: "rocky",
+      atmosphere: true,
+      radiationLevel: 0.6,
+      temperature: 462,
+      info: "Venus is the hottest planet due to its thick, toxic atmosphere that traps heat. It rotates backwards compared to most planets.",
+      facts: ["Surface temp: 462°C", "Thick CO2 atmosphere", "Rotates backwards"],
+      moons: []
+    },
+    earth: {
+      name: "Earth",
+      distance: 50,
+      size: 1.3,
+      color: 0x6B93D6,
+      type: "rocky",
+      atmosphere: true,
+      clouds: true,
+      radiationLevel: 0.1,
+      temperature: 15,
+      info: "Earth is the only known planet with life. It has liquid water, a protective atmosphere, and a strong magnetic field.",
+      facts: ["71% water coverage", "Only planet with life", "1 natural satellite (Moon)"],
+      moons: [
+        { name: "Moon", distance: 3, size: 0.35, color: 0xC0C0C0, speed: 0.02 }
+      ]
+    },
+    mars: {
+      name: "Mars",
+      distance: 70,
+      size: 1.0,
+      color: 0xCD5C5C,
+      type: "rocky",
+      atmosphere: true,
+      radiationLevel: 0.3,
+      temperature: -65,
+      info: "Mars is known as the Red Planet due to iron oxide on its surface. It has the largest volcano in the solar system, Olympus Mons.",
+      facts: ["Day: 24.6 hours", "2 small moons", "Polar ice caps"],
+      moons: [
+        { name: "Phobos", distance: 1.5, size: 0.1, color: 0x8C7853, speed: 0.08 },
+        { name: "Deimos", distance: 2.2, size: 0.08, color: 0x8C7853, speed: 0.04 }
+      ]
+    },
+    jupiter: {
+      name: "Jupiter",
+      distance: 120,
+      size: 4.0,
+      color: 0xD8CA9D,
+      type: "gas",
+      atmosphere: true,
+      radiationLevel: 0.9,
+      temperature: -110,
+      info: "Jupiter is the largest planet and acts as a 'cosmic vacuum cleaner,' protecting inner planets from asteroids and comets.",
+      facts: ["79+ known moons", "Great Red Spot storm", "Mostly hydrogen and helium"],
+      moons: [
+        { name: "Io", distance: 6, size: 0.4, color: 0xFFFF99, speed: 0.06 },
+        { name: "Europa", distance: 8, size: 0.35, color: 0xB8D4F0, speed: 0.04 },
+        { name: "Ganymede", distance: 10, size: 0.5, color: 0x8C7853, speed: 0.03 },
+        { name: "Callisto", distance: 13, size: 0.45, color: 0x4A4A4A, speed: 0.02 }
+      ]
+    },
+    saturn: {
+      name: "Saturn",
+      distance: 180,
+      size: 3.5,
+      color: 0xFAD5A5,
+      type: "gas",
+      atmosphere: true,
+      radiationLevel: 0.7,
+      temperature: -140,
+      info: "Saturn is famous for its spectacular ring system made of ice and rock particles. It's less dense than water.",
+      facts: ["Prominent ring system", "82+ known moons", "Less dense than water"],
+      moons: [
+        { name: "Titan", distance: 8, size: 0.6, color: 0xCC9966, speed: 0.025 },
+        { name: "Enceladus", distance: 6, size: 0.2, color: 0xF0F8FF, speed: 0.04 }
+      ]
+    },
+    uranus: {
+      name: "Uranus",
+      distance: 250,
+      size: 2.0,
+      color: 0x4FD0E7,
+      type: "ice",
+      atmosphere: true,
+      radiationLevel: 0.4,
+      temperature: -195,
+      info: "Uranus rotates on its side, likely due to an ancient collision. It's an ice giant with a faint ring system.",
+      facts: ["Rotates on its side", "Methane gives blue color", "Faint rings"],
+      moons: [
+        { name: "Titania", distance: 4, size: 0.25, color: 0x8C8C8C, speed: 0.03 },
+        { name: "Oberon", distance: 5, size: 0.23, color: 0x999999, speed: 0.025 }
+      ]
+    },
+    neptune: {
+      name: "Neptune",
+      distance: 320,
+      size: 1.9,
+      color: 0x4B70DD,
+      type: "ice",
+      atmosphere: true,
+      radiationLevel: 0.5,
+      temperature: -200,
+      info: "Neptune is the windiest planet with speeds up to 2,100 km/h. It was discovered through mathematical predictions.",
+      facts: ["Strongest winds", "14 known moons", "Discovered by math"],
+      moons: [
+        { name: "Triton", distance: 4.5, size: 0.3, color: 0xB0C4DE, speed: 0.035 }
+      ]
+    }
+  };
+
+  // Advanced procedural texture generation
+  const createAdvancedTexture = (type, size = 512) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+
+    switch (type) {
+      case 'earth':
+        const gradient = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+        gradient.addColorStop(0, '#4A90E2');
+        gradient.addColorStop(0.7, '#2E5BDA');
+        gradient.addColorStop(1, '#1B3A8C');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, size, size);
+
+        ctx.fillStyle = '#228B22';
+        for (let i = 0; i < 25; i++) {
+          ctx.beginPath();
+          ctx.ellipse(
+            Math.random() * size,
+            Math.random() * size,
+            Math.random() * 60 + 20,
+            Math.random() * 40 + 15,
+            Math.random() * Math.PI,
+            0, Math.PI * 2
+          );
+          ctx.fill();
+        }
+
+        ctx.fillStyle = '#F0F8FF';
+        ctx.beginPath();
+        ctx.ellipse(size/2, 20, 80, 30, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(size/2, size-20, 80, 30, 0, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+
+      case 'mars':
+        ctx.fillStyle = '#CD5C5C';
+        ctx.fillRect(0, 0, size, size);
+        
+        ctx.fillStyle = '#A0522D';
+        for (let i = 0; i < 30; i++) {
+          ctx.beginPath();
+          ctx.arc(Math.random() * size, Math.random() * size, Math.random() * 20 + 5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.fillStyle = '#FFFAF0';
+        ctx.beginPath();
+        ctx.ellipse(size/2, 15, 40, 15, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(size/2, size-15, 40, 15, 0, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+
+      case 'jupiter':
+        for (let y = 0; y < size; y++) {
+          const band = Math.sin(y / size * Math.PI * 8) * 0.3 + 0.7;
+          const hue = 30 + Math.sin(y / size * Math.PI * 3) * 20;
+          ctx.fillStyle = `hsl(${hue}, 70%, ${band * 50 + 30}%)`;
+          ctx.fillRect(0, y, size, 1);
+        }
+
+        ctx.fillStyle = '#CD5C5C';
+        ctx.beginPath();
+        ctx.ellipse(size * 0.7, size * 0.6, 30, 20, 0, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+
+      default:
+        ctx.fillStyle = '#8C7853';
+        ctx.fillRect(0, 0, size, size);
+        
+        for (let i = 0; i < 20; i++) {
+          ctx.fillStyle = '#5D5D5D';
+          ctx.beginPath();
+          ctx.arc(Math.random() * size, Math.random() * size, Math.random() * 15 + 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+    }
+
+    return new THREE.CanvasTexture(canvas);
+  };
+
+  // Create PBR materials for planets
+  const createPBRMaterial = (planetKey, data) => {
+    if (planetKey === 'sun') {
+      return new THREE.MeshBasicMaterial({
+        color: data.color,
+        emissive: data.emissive,
+        emissiveIntensity: 1.0
+      });
+    }
+
+    const diffuseTexture = createAdvancedTexture(planetKey);
+    const material = new THREE.MeshStandardMaterial({
+      map: diffuseTexture,
+      roughness: data.type === 'gas' ? 0.1 : 0.8,
+      metalness: data.type === 'rocky' ? 0.1 : 0.0,
+    });
+
+    if (data.type === 'gas') {
+      material.emissive = new THREE.Color(data.color);
+      material.emissiveIntensity = 0.1;
+    }
+
+    return material;
+  };
+  const planetData = {
+    sun: {
+      name: "The Sun",
+      distance: 0,
+      size: 8,
+      color: 0xFDB813,
+      emissive: 0xFFA500,
+      type: "star",
+      radiationLevel: 1.0,
+      temperature: 5778,
+      info: "The Sun is a yellow dwarf star that contains 99.86% of the Solar System's mass. Its core temperature reaches 15 million°C, creating the nuclear fusion that powers our solar system.",
+      facts: ["Age: 4.6 billion years", "Diameter: 1.39 million km", "Surface temp: 5,778K"],
+      moons: []
+    },
+    mercury: {
+      name: "Mercury",
+      distance: 25,
+      size: 0.8,
+      color: 0x8C7853,
+      type: "rocky",
+      radiationLevel: 0.8,
+      temperature: 167,
+      info: "Mercury is the smallest planet and closest to the Sun. It has extreme temperature variations, from 427°C during the day to -173°C at night.",
+      facts: ["Day length: 59 Earth days", "No atmosphere", "Heavily cratered surface"],
+      moons: []
+    },
+    venus: {
+      name: "Venus",
+      distance: 35,
+      size: 1.2,
+      color: 0xFFC649,
+      type: "rocky",
+      atmosphere: true,
+      radiationLevel: 0.6,
+      temperature: 462,
+      info: "Venus is the hottest planet due to its thick, toxic atmosphere that traps heat. It rotates backwards compared to most planets.",
+      facts: ["Surface temp: 462°C", "Thick CO2 atmosphere", "Rotates backwards"],
+      moons: []
+    },
+    earth: {
+      name: "Earth",
+      distance: 50,
+      size: 1.3,
+      color: 0x6B93D6,
+      type: "rocky",
+      atmosphere: true,
+      clouds: true,
+      radiationLevel: 0.1,
+      temperature: 15,
+      info: "Earth is the only known planet with life. It has liquid water, a protective atmosphere, and a strong magnetic field.",
+      facts: ["71% water coverage", "Only planet with life", "1 natural satellite (Moon)"],
+      moons: [
+        { name: "Moon", distance: 3, size: 0.35, color: 0xC0C0C0, speed: 0.02 }
+      ]
+    },
+    mars: {
+      name: "Mars",
+      distance: 70,
+      size: 1.0,
+      color: 0xCD5C5C,
+      type: "rocky",
+      atmosphere: true,
+      radiationLevel: 0.3,
+      temperature: -65,
+      info: "Mars is known as the Red Planet due to iron oxide on its surface. It has the largest volcano in the solar system, Olympus Mons.",
+      facts: ["Day: 24.6 hours", "2 small moons", "Polar ice caps"],
+      moons: [
+        { name: "Phobos", distance: 1.5, size: 0.1, color: 0x8C7853, speed: 0.08 },
+        { name: "Deimos", distance: 2.2, size: 0.08, color: 0x8C7853, speed: 0.04 }
+      ]
+    },
+    jupiter: {
+      name: "Jupiter",
+      distance: 120,
+      size: 4.0,
+      color: 0xD8CA9D,
+      type: "gas",
+      atmosphere: true,
+      radiationLevel: 0.9,
+      temperature: -110,
+      info: "Jupiter is the largest planet and acts as a 'cosmic vacuum cleaner,' protecting inner planets from asteroids and comets.",
+      facts: ["79+ known moons", "Great Red Spot storm", "Mostly hydrogen and helium"],
+      moons: [
+        { name: "Io", distance: 6, size: 0.4, color: 0xFFFF99, speed: 0.06 },
+        { name: "Europa", distance: 8, size: 0.35, color: 0xB8D4F0, speed: 0.04 },
+        { name: "Ganymede", distance: 10, size: 0.5, color: 0x8C7853, speed: 0.03 },
+        { name: "Callisto", distance: 13, size: 0.45, color: 0x4A4A4A, speed: 0.02 }
+      ]
+    },
+    saturn: {
+      name: "Saturn",
+      distance: 180,
+      size: 3.5,
+      color: 0xFAD5A5,
+      type: "gas",
+      atmosphere: true,
+      radiationLevel: 0.7,
+      temperature: -140,
+      info: "Saturn is famous for its spectacular ring system made of ice and rock particles. It's less dense than water.",
+      facts: ["Prominent ring system", "82+ known moons", "Less dense than water"],
+      moons: [
+        { name: "Titan", distance: 8, size: 0.6, color: 0xCC9966, speed: 0.025 },
+        { name: "Enceladus", distance: 6, size: 0.2, color: 0xF0F8FF, speed: 0.04 }
+      ]
+    },
+    uranus: {
+      name: "Uranus",
+      distance: 250,
+      size: 2.0,
+      color: 0x4FD0E7,
+      type: "ice",
+      atmosphere: true,
+      radiationLevel: 0.4,
+      temperature: -195,
+      info: "Uranus rotates on its side, likely due to an ancient collision. It's an ice giant with a faint ring system.",
+      facts: ["Rotates on its side", "Methane gives blue color", "Faint rings"],
+      moons: [
+        { name: "Titania", distance: 4, size: 0.25, color: 0x8C8C8C, speed: 0.03 },
+        { name: "Oberon", distance: 5, size: 0.23, color: 0x999999, speed: 0.025 }
+      ]
+    },
+    neptune: {
+      name: "Neptune",
+      distance: 320,
+      size: 1.9,
+      color: 0x4B70DD,
+      type: "ice",
+      atmosphere: true,
+      radiationLevel: 0.5,
+      temperature: -200,
+      info: "Neptune is the windiest planet with speeds up to 2,100 km/h. It was discovered through mathematical predictions.",
+      facts: ["Strongest winds", "14 known moons", "Discovered by math"],
+      moons: [
+        { name: "Triton", distance: 4.5, size: 0.3, color: 0xB0C4DE, speed: 0.035 }
+      ]
+    }
+  };
+
+  // Create spacecraft based on type (procedural or custom model)
+  const createSpacecraft = useCallback(async (shipType, scene) => {
+    const config = shipTypes[shipType];
+    const shipGroup = new THREE.Group();
+    
+    if (config.type === 'custom' && config.modelUrl) {
+      try {
+        setModelLoading(true);
+        setModelLoadError(null);
+        
+        // Load custom model
+        const customModel = await loadCustomModel(config.modelUrl, config);
+        shipGroup.add(customModel);
+        
+        setModelLoading(false);
+      } catch (error) {
+        console.error('Failed to load custom model:', error);
+        setModelLoadError('Failed to load custom model, using fallback');
+        setModelLoading(false);
+        
+        // Fall back to procedural model
+        const fallbackShip = createProceduralShip(config);
+        shipGroup.add(fallbackShip);
+      }
+    } else {
+      // Create procedural ship
+      const proceduralShip = createProceduralShip(config);
+      shipGroup.add(proceduralShip);
+    }
+    
+    // Add common ship components (lights, effects, etc.)
+    addShipComponents(shipGroup, config);
+    
+    return shipGroup;
+  }, [loadCustomModel]);
+
+  // Create procedural ship (original system)
+  const createProceduralShip = (config) => {
+    const shipGroup = new THREE.Group();
+    const scale = config.size;
+    
+  // Create detailed cockpit (extracted from original code)
+  const createDetailedCockpit = (scale, config) => {
+    const cockpitGroup = new THREE.Group();
+    
+    // Main cockpit canopy (glass dome)
+    const canopyGeometry = new THREE.SphereGeometry(0.45 * scale, 24, 24);
+    const canopyMaterial = new THREE.MeshPhysicalMaterial({
+      color: 0x88DDFF,
+      metalness: 0.0,
+      roughness: 0.0,
+      transmission: 0.95,
+      transparent: true,
+      opacity: 0.15,
+      reflectivity: 0.2,
+      ior: 1.5,
+      thickness: 0.01
+    });
+    const canopy = new THREE.Mesh(canopyGeometry, canopyMaterial);
+    canopy.position.z = -0.8 * scale;
+    canopy.scale.z = 0.8;
+    cockpitGroup.add(canopy);
+    
+    // Cockpit frame structure
+    const frameGeometry = new THREE.TorusGeometry(0.4 * scale, 0.02 * scale, 8, 16);
+    const frameMaterial = new THREE.MeshStandardMaterial({
+      color: 0x333333,
+      metalness: 0.8,
+      roughness: 0.2
+    });
+    const cockpitFrame = new THREE.Mesh(frameGeometry, frameMaterial);
+    cockpitFrame.position.z = -0.8 * scale;
+    cockpitFrame.rotation.x = Math.PI / 2;
+    cockpitGroup.add(cockpitFrame);
+    
+    // Pilot seat
+    const seatGeometry = new THREE.BoxGeometry(0.3 * scale, 0.4 * scale, 0.15 * scale);
+    const seatMaterial = new THREE.MeshStandardMaterial({
+      color: 0x2a2a2a,
+      roughness: 0.8
+    });
+    const seat = new THREE.Mesh(seatGeometry, seatMaterial);
+    seat.position.set(0, 0, -0.7 * scale);
+    cockpitGroup.add(seat);
+    
+    // Control panels
+    const panelGeometry = new THREE.BoxGeometry(0.25 * scale, 0.15 * scale, 0.03 * scale);
+    const panelMaterial = new THREE.MeshStandardMaterial({
+      color: 0x1a1a2e,
+      emissive: 0x002244,
+      emissiveIntensity: 0.3
+    });
+    
+    const leftPanel = new THREE.Mesh(panelGeometry, panelMaterial);
+    leftPanel.position.set(-0.25 * scale, 0, -0.55 * scale);
+    leftPanel.rotation.y = -Math.PI / 6;
+    cockpitGroup.add(leftPanel);
+    
+    const rightPanel = new THREE.Mesh(panelGeometry, panelMaterial);
+    rightPanel.position.set(0.25 * scale, 0, -0.55 * scale);
+    rightPanel.rotation.y = Math.PI / 6;
+    cockpitGroup.add(rightPanel);
+    
+    // Cockpit lighting
+    const cockpitLight = new THREE.PointLight(0x4488ff, 0.8 * scale, 2 * scale);
+    cockpitLight.position.set(0, 0.2 * scale, -0.6 * scale);
+    cockpitGroup.add(cockpitLight);
+    
+    return cockpitGroup;
+  };
+    
+    // Engine section
+    const engineGeometry = new THREE.CylinderGeometry(0.3 * scale, 0.4 * scale, 0.8 * scale, 16);
+    const engineMaterial = new THREE.MeshStandardMaterial({
+      color: config.engineColor,
+      metalness: 0.9,
+      roughness: 0.0,
+      emissive: config.engineColor,
+      emissiveIntensity: 0.8
+    });
+    const engine = new THREE.Mesh(engineGeometry, engineMaterial);
+    engine.position.z = 1.4 * scale;
+    engine.rotation.x = Math.PI / 2;
+    engine.castShadow = true;
+    shipGroup.add(engine);
+    
+    // Wings (varied by ship type)
+    const wingScale = config.name.includes('Fighter') ? 1.2 : config.name.includes('Cargo') ? 0.8 : 1.0;
+    const wingGeometry = new THREE.BoxGeometry(1.5 * scale * wingScale, 0.1 * scale, 0.8 * scale);
+    const wingMaterial = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(config.color).multiplyScalar(0.8),
+      metalness: 0.7,
+      roughness: 0.2,
+      emissive: new THREE.Color(config.color).multiplyScalar(0.05),
+      emissiveIntensity: 0.1
+    });
+    
+    const leftWing = new THREE.Mesh(wingGeometry, wingMaterial);
+    leftWing.position.set(-0.8 * scale * wingScale, 0, 0.3 * scale);
+    leftWing.castShadow = true;
+    shipGroup.add(leftWing);
+    
+    const rightWing = new THREE.Mesh(wingGeometry, wingMaterial);
+    rightWing.position.set(0.8 * scale * wingScale, 0, 0.3 * scale);
+    rightWing.castShadow = true;
+    shipGroup.add(rightWing);
+    
+    return shipGroup;
+  };
+
+  // Add common ship components (lights, effects, cockpit)
+  const addShipComponents = (shipGroup, config) => {
+    const scale = config.size;
+    
+    // Enhanced cockpit with detailed interior
+    const cockpitGroup = createDetailedCockpit(scale, config);
+    shipGroup.add(cockpitGroup);
+    
+    // Navigation lights
+    const createNavLight = (color, position, intensity = 2.0) => {
+      const lightGeometry = new THREE.SphereGeometry(0.08 * scale, 8, 8);
+      const lightMaterial = new THREE.MeshBasicMaterial({
+        color: color,
+        emissive: color,
+        emissiveIntensity: intensity
+      });
+      const light = new THREE.Mesh(lightGeometry, lightMaterial);
+      light.position.copy(position.multiplyScalar(scale));
+      
+      const pointLight = new THREE.PointLight(color, 0.5, 5 * scale);
+      pointLight.position.copy(position);
+      light.add(pointLight);
+      
+      return light;
+    };
+    
+    const portLight = createNavLight(0xff3333, new THREE.Vector3(-0.9, 0, 0.2));
+    const starboardLight = createNavLight(0x33ff33, new THREE.Vector3(0.9, 0, 0.2));
+    const noseLight = createNavLight(0xffffff, new THREE.Vector3(0, 0, -1.2));
+    shipGroup.add(portLight, starboardLight, noseLight);
+    
+    // Engine glow
+    const engineGlowGeometry = new THREE.CylinderGeometry(0.5 * scale, 0.7 * scale, 1.2 * scale, 16);
+    const engineGlowMaterial = new THREE.MeshBasicMaterial({
+      color: config.engineColor,
+      transparent: true,
+      opacity: 0.6,
+      blending: THREE.AdditiveBlending
+    });
+    const engineGlow = new THREE.Mesh(engineGlowGeometry, engineGlowMaterial);
+    engineGlow.position.z = 1.9 * scale;
+    engineGlow.rotation.x = Math.PI / 2;
+    shipGroup.add(engineGlow);
+    
+    // Ship lighting
+    const shipLight = new THREE.PointLight(0xffffff, 2.0 * scale, 20 * scale);
+    shipLight.position.set(0, 3 * scale, 0);
+    shipGroup.add(shipLight);
+    
+    // Store ship configuration and components
+    shipGroup.userData = {
+      config: config,
+      engineGlow: engineGlow,
+      navLights: [portLight, starboardLight, noseLight],
+      shipLight: shipLight,
+      cockpitGroup: cockpitGroup,
+      scale: scale
+    };
+  };
+    
+    // Main hull
+    const hullGeometry = new THREE.ConeGeometry(0.6 * scale, 2.5 * scale, 16);
+    const hullMaterial = new THREE.MeshStandardMaterial({
+      color: config.color,
+      metalness: 0.8,
+      roughness: 0.1,
+      emissive: new THREE.Color(config.color).multiplyScalar(0.1),
+      emissiveIntensity: 0.2
+    });
+    const hull = new THREE.Mesh(hullGeometry, hullMaterial);
+    hull.rotation.x = Math.PI / 2;
+    hull.castShadow = true;
+    hull.receiveShadow = true;
+    shipGroup.add(hull);
+    
+    // Engine section
+    const engineGeometry = new THREE.CylinderGeometry(0.3 * scale, 0.4 * scale, 0.8 * scale, 16);
+    const engineMaterial = new THREE.MeshStandardMaterial({
+      color: config.engineColor,
+      metalness: 0.9,
+      roughness: 0.0,
+      emissive: config.engineColor,
+      emissiveIntensity: 0.8
+    });
+    const engine = new THREE.Mesh(engineGeometry, engineMaterial);
+    engine.position.z = 1.4 * scale;
+    engine.rotation.x = Math.PI / 2;
+    engine.castShadow = true;
+    shipGroup.add(engine);
+    
+    // Wings (varied by ship type)
+    const wingScale = shipType === 'fighter' ? 1.2 : shipType === 'cargo' ? 0.8 : 1.0;
+    const wingGeometry = new THREE.BoxGeometry(1.5 * scale * wingScale, 0.1 * scale, 0.8 * scale);
+    const wingMaterial = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(config.color).multiplyScalar(0.8),
+      metalness: 0.7,
+      roughness: 0.2,
+      emissive: new THREE.Color(config.color).multiplyScalar(0.05),
+      emissiveIntensity: 0.1
+    });
+    
+    const leftWing = new THREE.Mesh(wingGeometry, wingMaterial);
+    leftWing.position.set(-0.8 * scale * wingScale, 0, 0.3 * scale);
+    leftWing.castShadow = true;
+    shipGroup.add(leftWing);
+    
+    const rightWing = new THREE.Mesh(wingGeometry, wingMaterial);
+    rightWing.position.set(0.8 * scale * wingScale, 0, 0.3 * scale);
+    rightWing.castShadow = true;
+    shipGroup.add(rightWing);
+    
+    // Enhanced cockpit with detailed interior
+    const cockpitGroup = new THREE.Group();
+    
+    // Main cockpit canopy (glass dome)
+    const canopyGeometry = new THREE.SphereGeometry(0.45 * scale, 24, 24);
+    const canopyMaterial = new THREE.MeshPhysicalMaterial({
+      color: 0x88DDFF,
+      metalness: 0.0,
+      roughness: 0.0,
+      transmission: 0.95,
+      transparent: true,
+      opacity: 0.15,
+      reflectivity: 0.2,
+      ior: 1.5,
+      thickness: 0.01
+    });
+    const canopy = new THREE.Mesh(canopyGeometry, canopyMaterial);
+    canopy.position.z = -0.8 * scale;
+    canopy.scale.z = 0.8;
+    cockpitGroup.add(canopy);
+    
+    // Cockpit frame structure
+    const frameGeometry = new THREE.TorusGeometry(0.4 * scale, 0.02 * scale, 8, 16);
+    const frameMaterial = new THREE.MeshStandardMaterial({
+      color: 0x333333,
+      metalness: 0.8,
+      roughness: 0.2
+    });
+    const cockpitFrame = new THREE.Mesh(frameGeometry, frameMaterial);
+    cockpitFrame.position.z = -0.8 * scale;
+    cockpitFrame.rotation.x = Math.PI / 2;
+    cockpitGroup.add(cockpitFrame);
+    
+    // Pilot seat
+    const seatGeometry = new THREE.BoxGeometry(0.3 * scale, 0.4 * scale, 0.15 * scale);
+    const seatMaterial = new THREE.MeshStandardMaterial({
+      color: 0x2a2a2a,
+      roughness: 0.8
+    });
+    const seat = new THREE.Mesh(seatGeometry, seatMaterial);
+    seat.position.set(0, 0, -0.7 * scale);
+    cockpitGroup.add(seat);
+    
+    // Seat back
+    const seatBackGeometry = new THREE.BoxGeometry(0.25 * scale, 0.4 * scale, 0.08 * scale);
+    const seatBack = new THREE.Mesh(seatBackGeometry, seatMaterial);
+    seatBack.position.set(0, 0.2 * scale, -0.65 * scale);
+    cockpitGroup.add(seatBack);
+    
+    // Control stick
+    const stickGeometry = new THREE.CylinderGeometry(0.02 * scale, 0.02 * scale, 0.3 * scale, 8);
+    const stickMaterial = new THREE.MeshStandardMaterial({
+      color: 0x444444,
+      metalness: 0.7,
+      roughness: 0.3
+    });
+    const controlStick = new THREE.Mesh(stickGeometry, stickMaterial);
+    controlStick.position.set(0, -0.1 * scale, -0.5 * scale);
+    cockpitGroup.add(controlStick);
+    
+    // Control stick grip
+    const gripGeometry = new THREE.SphereGeometry(0.04 * scale, 12, 12);
+    const gripMaterial = new THREE.MeshStandardMaterial({
+      color: 0xff4444,
+      roughness: 0.6
+    });
+    const grip = new THREE.Mesh(gripGeometry, gripMaterial);
+    grip.position.set(0, 0.05 * scale, -0.5 * scale);
+    cockpitGroup.add(grip);
+    
+    // Left control panel
+    const leftPanelGeometry = new THREE.BoxGeometry(0.25 * scale, 0.15 * scale, 0.03 * scale);
+    const panelMaterial = new THREE.MeshStandardMaterial({
+      color: 0x1a1a2e,
+      emissive: 0x002244,
+      emissiveIntensity: 0.3
+    });
+    const leftPanel = new THREE.Mesh(leftPanelGeometry, panelMaterial);
+    leftPanel.position.set(-0.25 * scale, 0, -0.55 * scale);
+    leftPanel.rotation.y = -Math.PI / 6;
+    leftPanel.rotation.x = -Math.PI / 12;
+    cockpitGroup.add(leftPanel);
+    
+    // Right control panel
+    const rightPanel = new THREE.Mesh(leftPanelGeometry, panelMaterial);
+    rightPanel.position.set(0.25 * scale, 0, -0.55 * scale);
+    rightPanel.rotation.y = Math.PI / 6;
+    rightPanel.rotation.x = -Math.PI / 12;
+    cockpitGroup.add(rightPanel);
+    
+    // Main instrument panel
+    const mainPanelGeometry = new THREE.BoxGeometry(0.4 * scale, 0.2 * scale, 0.03 * scale);
+    const mainPanel = new THREE.Mesh(mainPanelGeometry, panelMaterial);
+    mainPanel.position.set(0, 0.1 * scale, -0.6 * scale);
+    mainPanel.rotation.x = -Math.PI / 8;
+    cockpitGroup.add(mainPanel);
+    
+    // Instrument displays (screens)
+    const createScreen = (width, height, position, rotation = { x: 0, y: 0, z: 0 }) => {
+      const screenGeometry = new THREE.PlaneGeometry(width * scale, height * scale);
+      
+      // Create a canvas for the screen content
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 256;
+      const ctx = canvas.getContext('2d');
+      
+      // Draw screen content
+      ctx.fillStyle = '#001122';
+      ctx.fillRect(0, 0, 256, 256);
+      
+      // Grid pattern
+      ctx.strokeStyle = '#00ff44';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < 256; i += 32) {
+        ctx.beginPath();
+        ctx.moveTo(i, 0);
+        ctx.lineTo(i, 256);
+        ctx.moveTo(0, i);
+        ctx.lineTo(256, i);
+        ctx.stroke();
+      }
+      
+      // Center crosshair
+      ctx.strokeStyle = '#ff4444';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(128, 112);
+      ctx.lineTo(128, 144);
+      ctx.moveTo(112, 128);
+      ctx.lineTo(144, 128);
+      ctx.stroke();
+      
+      // Status text
+      ctx.fillStyle = '#00ff44';
+      ctx.font = '12px monospace';
+      ctx.fillText('SYSTEMS ONLINE', 10, 20);
+      ctx.fillText('NAV: ACTIVE', 10, 40);
+      ctx.fillText('FUEL: OK', 10, 60);
+      
+      const texture = new THREE.CanvasTexture(canvas);
+      const screenMaterial = new THREE.MeshBasicMaterial({
+        map: texture,
+        emissive: 0x002244,
+        emissiveIntensity: 0.5
+      });
+      
+      const screen = new THREE.Mesh(screenGeometry, screenMaterial);
+      screen.position.copy(position);
+      screen.rotation.x = rotation.x;
+      screen.rotation.y = rotation.y;
+      screen.rotation.z = rotation.z;
+      
+      return screen;
+    };
+    
+    // Main HUD display
+    const mainScreen = createScreen(0.35, 0.15, 
+      new THREE.Vector3(0, 0.1 * scale, -0.57 * scale),
+      { x: -Math.PI / 8, y: 0, z: 0 }
+    );
+    cockpitGroup.add(mainScreen);
+    
+    // Left side screen
+    const leftScreen = createScreen(0.2, 0.12, 
+      new THREE.Vector3(-0.25 * scale, 0, -0.52 * scale),
+      { x: -Math.PI / 12, y: -Math.PI / 6, z: 0 }
+    );
+    cockpitGroup.add(leftScreen);
+    
+    // Right side screen
+    const rightScreen = createScreen(0.2, 0.12, 
+      new THREE.Vector3(0.25 * scale, 0, -0.52 * scale),
+      { x: -Math.PI / 12, y: Math.PI / 6, z: 0 }
+    );
+    cockpitGroup.add(rightScreen);
+    
+    // Control buttons and switches
+    const createButton = (color, position) => {
+      const buttonGeometry = new THREE.CylinderGeometry(0.02 * scale, 0.02 * scale, 0.01 * scale, 8);
+      const buttonMaterial = new THREE.MeshStandardMaterial({
+        color: color,
+        emissive: color,
+        emissiveIntensity: 0.4
+      });
+      const button = new THREE.Mesh(buttonGeometry, buttonMaterial);
+      button.position.copy(position);
+      return button;
+    };
+    
+    // Add various control buttons
+    const buttons = [
+      { color: 0xff0000, pos: new THREE.Vector3(-0.15 * scale, 0.05 * scale, -0.57 * scale) },
+      { color: 0x00ff00, pos: new THREE.Vector3(-0.1 * scale, 0.05 * scale, -0.57 * scale) },
+      { color: 0x0000ff, pos: new THREE.Vector3(-0.05 * scale, 0.05 * scale, -0.57 * scale) },
+      { color: 0xffff00, pos: new THREE.Vector3(0.05 * scale, 0.05 * scale, -0.57 * scale) },
+      { color: 0xff8800, pos: new THREE.Vector3(0.1 * scale, 0.05 * scale, -0.57 * scale) },
+      { color: 0x8800ff, pos: new THREE.Vector3(0.15 * scale, 0.05 * scale, -0.57 * scale) }
+    ];
+    
+    buttons.forEach(btn => {
+      cockpitGroup.add(createButton(btn.color, btn.pos));
+    });
+    
+    // Cockpit lighting
+    const cockpitLight = new THREE.PointLight(0x4488ff, 0.8 * scale, 2 * scale);
+    cockpitLight.position.set(0, 0.2 * scale, -0.6 * scale);
+    cockpitGroup.add(cockpitLight);
+    
+    // Instrument panel glow
+    const instrumentGlow = new THREE.PointLight(0x00ff44, 0.5 * scale, 1 * scale);
+    instrumentGlow.position.set(0, 0.1 * scale, -0.55 * scale);
+    cockpitGroup.add(instrumentGlow);
+    
+    // Add the entire cockpit to the ship
+    shipGroup.add(cockpitGroup);
+    
+    // Navigation lights
+    const createNavLight = (color, position, intensity = 2.0) => {
+      const lightGeometry = new THREE.SphereGeometry(0.08 * scale, 8, 8);
+      const lightMaterial = new THREE.MeshBasicMaterial({
+        color: color,
+        emissive: color,
+        emissiveIntensity: intensity
+      });
+      const light = new THREE.Mesh(lightGeometry, lightMaterial);
+      light.position.copy(position.multiplyScalar(scale));
+      
+      const pointLight = new THREE.PointLight(color, 0.5, 5 * scale);
+      pointLight.position.copy(position);
+      light.add(pointLight);
+      
+      return light;
+    };
+    
+    const portLight = createNavLight(0xff3333, new THREE.Vector3(-0.9, 0, 0.2));
+    const starboardLight = createNavLight(0x33ff33, new THREE.Vector3(0.9, 0, 0.2));
+    const noseLight = createNavLight(0xffffff, new THREE.Vector3(0, 0, -1.2));
+    shipGroup.add(portLight, starboardLight, noseLight);
+    
+    // Engine glow
+    const engineGlowGeometry = new THREE.CylinderGeometry(0.5 * scale, 0.7 * scale, 1.2 * scale, 16);
+    const engineGlowMaterial = new THREE.MeshBasicMaterial({
+      color: config.engineColor,
+      transparent: true,
+      opacity: 0.6,
+      blending: THREE.AdditiveBlending
+    });
+    const engineGlow = new THREE.Mesh(engineGlowGeometry, engineGlowMaterial);
+    engineGlow.position.z = 1.9 * scale;
+    engineGlow.rotation.x = Math.PI / 2;
+    shipGroup.add(engineGlow);
+    
+    // Ship lighting
+    const shipLight = new THREE.PointLight(0xffffff, 2.0 * scale, 20 * scale);
+    shipLight.position.set(0, 3 * scale, 0);
+    shipGroup.add(shipLight);
+    
+    // Store ship configuration and components
+    shipGroup.userData = {
+      config: config,
+      engineGlow: engineGlow,
+      navLights: [portLight, starboardLight, noseLight],
+      shipLight: shipLight,
+      cockpitGroup: cockpitGroup,
+      scale: scale
+    };
+    
+    return shipGroup;
+  };
+
+  // Create cockpit HUD elements
+  const createCockpitHUD = () => {
+    const hudGroup = new THREE.Group();
+    
+    // Radar screen (positioned to match cockpit)
+    const radarGeometry = new THREE.PlaneGeometry(0.8, 0.8);
+    const radarCanvas = document.createElement('canvas');
+    radarCanvas.width = 512;
+    radarCanvas.height = 512;
+    const radarTexture = new THREE.CanvasTexture(radarCanvas);
+    
+    const radarMaterial = new THREE.MeshBasicMaterial({
+      map: radarTexture,
+      transparent: true,
+      opacity: 0.9
+    });
+    const radarScreen = new THREE.Mesh(radarGeometry, radarMaterial);
+    radarScreen.position.set(-1.5, 0.2, -2);
+    radarScreen.lookAt(0, 0, 0);
+    hudGroup.add(radarScreen);
+    
+    // Navigation display (larger for better visibility)
+    const navGeometry = new THREE.PlaneGeometry(1.8, 0.9);
+    const navCanvas = document.createElement('canvas');
+    navCanvas.width = 512;
+    navCanvas.height = 256;
+    const navTexture = new THREE.CanvasTexture(navCanvas);
+    
+    const navMaterial = new THREE.MeshBasicMaterial({
+      map: navTexture,
+      transparent: true,
+      opacity: 0.95
+    });
+    const navScreen = new THREE.Mesh(navGeometry, navMaterial);
+    navScreen.position.set(0, -0.3, -2.2);
+    navScreen.lookAt(0, 0, 0);
+    hudGroup.add(navScreen);
+    
+    // Crosshair overlay
+    const crosshairGeometry = new THREE.PlaneGeometry(0.1, 0.1);
+    const crosshairCanvas = document.createElement('canvas');
+    crosshairCanvas.width = 64;
+    crosshairCanvas.height = 64;
+    const crosshairCtx = crosshairCanvas.getContext('2d');
+    
+    // Draw crosshair
+    crosshairCtx.strokeStyle = '#ff0000';
+    crosshairCtx.lineWidth = 2;
+    crosshairCtx.beginPath();
+    crosshairCtx.moveTo(32, 16);
+    crosshairCtx.lineTo(32, 48);
+    crosshairCtx.moveTo(16, 32);
+    crosshairCtx.lineTo(48, 32);
+    crosshairCtx.stroke();
+    
+    const crosshairTexture = new THREE.CanvasTexture(crosshairCanvas);
+    const crosshairMaterial = new THREE.MeshBasicMaterial({
+      map: crosshairTexture,
+      transparent: true,
+      depthTest: false
+    });
+    const crosshair = new THREE.Mesh(crosshairGeometry, crosshairMaterial);
+    crosshair.position.set(0, 0, -1.5);
+    hudGroup.add(crosshair);
+    
+    hudGroup.userData = {
+      radarCanvas: radarCanvas,
+      radarTexture: radarTexture,
+      navCanvas: navCanvas,
+      navTexture: navTexture
+    };
+    
+    return hudGroup;
+  };
+
+  // Update radar display
+  const updateRadar = useCallback((radarCanvas, shipPosition) => {
+    const ctx = radarCanvas.getContext('2d');
+    ctx.fillStyle = 'rgba(0, 20, 40, 0.9)';
+    ctx.fillRect(0, 0, 512, 512);
+    
+    // Draw radar grid
+    ctx.strokeStyle = 'rgba(0, 255, 100, 0.3)';
+    ctx.lineWidth = 1;
+    
+    // Concentric circles
+    for (let i = 1; i <= 4; i++) {
+      ctx.beginPath();
+      ctx.arc(256, 256, i * 64, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    
+    // Cross-hairs
+    ctx.beginPath();
+    ctx.moveTo(256, 0);
+    ctx.lineTo(256, 512);
+    ctx.moveTo(0, 256);
+    ctx.lineTo(512, 256);
+    ctx.stroke();
+    
+    // Draw planets as radar blips
+    const radarRange = 200;
+    Object.entries(planetsRef.current).forEach(([key, planet]) => {
+      const distance = shipPosition.distanceTo(planet.position);
+      if (distance < radarRange) {
+        const relativePos = planet.position.clone().sub(shipPosition);
+        const radarX = 256 + (relativePos.x / radarRange) * 200;
+        const radarY = 256 + (relativePos.z / radarRange) * 200;
+        
+        if (radarX >= 0 && radarX <= 512 && radarY >= 0 && radarY <= 512) {
+          ctx.fillStyle = key === 'sun' ? '#ffaa00' : '#00aaff';
+          ctx.beginPath();
+          ctx.arc(radarX, radarY, planetData[key].size * 2 + 3, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // Label
+          ctx.fillStyle = '#ffffff';
+          ctx.font = '10px monospace';
+          ctx.fillText(planetData[key].name.substring(0, 3), radarX + 8, radarY);
+        }
+      }
+    });
+    
+    // Draw ship at center
+    ctx.fillStyle = '#ff0000';
+    ctx.beginPath();
+    ctx.arc(256, 256, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }, []);
+
+  // Update navigation display
+  const updateNavDisplay = useCallback((navCanvas, ship) => {
+    const ctx = navCanvas.getContext('2d');
+    ctx.fillStyle = 'rgba(0, 15, 30, 0.95)';
+    ctx.fillRect(0, 0, 512, 256);
+    
+    // Header
+    ctx.fillStyle = '#00ff88';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText('NAVIGATION COMPUTER', 10, 25);
+    
+    // Ship status
+    ctx.font = '12px monospace';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(`SHIP: ${shipTypes[selectedShipType].name.toUpperCase()}`, 10, 50);
+    ctx.fillText(`SPEED: ${shipStats.speed.toFixed(2)} c/s`, 10, 70);
+    ctx.fillText(`FUEL: ${Math.round(shipStats.fuel)}%`, 10, 90);
+    ctx.fillText(`HULL: ${Math.round(shipStats.hull)}%`, 10, 110);
+    
+    // Environmental status
+    ctx.fillStyle = shipStats.radiation > 50 ? '#ff4444' : '#44ff44';
+    ctx.fillText(`RADIATION: ${Math.round(shipStats.radiation)}%`, 10, 130);
+    ctx.fillStyle = Math.abs(shipStats.temperature - 20) > 100 ? '#ff4444' : '#44ff44';
+    ctx.fillText(`TEMP: ${shipStats.temperature}°C`, 10, 150);
+    
+    // Autopilot status
+    if (autopilotActive && autopilotTarget) {
+      ctx.fillStyle = '#ffff00';
+      ctx.fillText('AUTOPILOT ENGAGED', 280, 50);
+      ctx.fillText(`TARGET: ${planetData[autopilotTarget].name.toUpperCase()}`, 280, 70);
+      const distance = ship.position.distanceTo(planetsRef.current[autopilotTarget].position);
+      ctx.fillText(`DISTANCE: ${distance.toFixed(1)}`, 280, 90);
+    } else {
+      ctx.fillStyle = '#888888';
+      ctx.fillText('MANUAL CONTROL', 280, 50);
+    }
+    
+    // Current planet info
+    if (currentPlanet) {
+      ctx.fillStyle = '#ff8800';
+      ctx.fillText('PROXIMITY ALERT', 280, 130);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(`NEAR: ${planetData[currentPlanet].name.toUpperCase()}`, 280, 150);
+    }
+    
+    // Warning messages
+    if (environmentalWarnings.length > 0) {
+      ctx.fillStyle = '#ff0000';
+      ctx.font = 'bold 12px monospace';
+      environmentalWarnings.forEach((warning, index) => {
+        ctx.fillText(`⚠ ${warning.toUpperCase()}`, 10, 180 + (index * 20));
+      });
+    }
+    
+    // Grid lines
+    ctx.strokeStyle = 'rgba(0, 255, 136, 0.2)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(260, 0);
+    ctx.lineTo(260, 256);
+    ctx.stroke();
+    
+  const handleKeyDown = useCallback((event) => {
+    keysRef.current[event.code] = true;
+    
+    // View mode toggle
+    if (event.code === 'KeyV') {
+      setViewMode(prev => prev === 'external' ? 'cockpit' : 'external');
+    }
+    
+    // Toggle planet info visibility
+    if (event.code === 'KeyI') {
+      setPlanetInfoVisible(prev => !prev);
+    }
+    
+    // Autopilot controls
+    if (event.code === 'Digit1') engageAutopilot('mercury');
+    if (event.code === 'Digit2') engageAutopilot('venus');
+    if (event.code === 'Digit3') engageAutopilot('earth');
+    if (event.code === 'Digit4') engageAutopilot('mars');
+    if (event.code === 'Digit5') engageAutopilot('jupiter');
+    if (event.code === 'Digit6') engageAutopilot('saturn');
+    if (event.code === 'Digit7') engageAutopilot('uranus');
+    if (event.code === 'Digit8') engageAutopilot('neptune');
+    if (event.code === 'KeyX') {
+      setAutopilotActive(false);
+      setAutopilotTarget(null);
+    }
+  }, [engageAutopilot]);
+
+  const handleKeyUp = useCallback((event) => {
+    keysRef.current[event.code] = false;
+  }, []);
+
+  const updateShip = useCallback(() => {
+    if (!shipRef.current || !cameraRef.current || !cockpitCameraRef.current) return;
+
+    const ship = shipRef.current;
+    const camera = cameraRef.current;
+    const cockpitCamera = cockpitCameraRef.current;
+    const velocity = velocityRef.current;
+    const keys = keysRef.current;
+    const config = shipTypes[selectedShipType];
+
+    // Update autopilot
+    updateAutopilot();
+
+    // Ship controls (disabled during autopilot)
+    if (!autopilotActive) {
+      const rotationSpeed = 0.025;
+
+      if (keys['KeyA'] || keys['ArrowLeft']) ship.rotation.z += rotationSpeed;
+      if (keys['KeyD'] || keys['ArrowRight']) ship.rotation.z -= rotationSpeed;
+      if (keys['KeyW'] || keys['ArrowUp']) ship.rotation.x -= rotationSpeed;
+      if (keys['KeyS'] || keys['ArrowDown']) ship.rotation.x += rotationSpeed;
+
+      // Thrust
+      const isThrusting = keys['Space'];
+      if (isThrusting && shipStats.fuel > 0) {
+        const forward = new THREE.Vector3(0, 0, -1);
+        forward.applyQuaternion(ship.quaternion);
+        forward.multiplyScalar(config.acceleration);
+        velocity.add(forward);
+      }
+    }
+
+    // Apply physics
+    velocity.multiplyScalar(0.985);
+    if (velocity.length() > config.maxSpeed) {
+      velocity.normalize().multiplyScalar(config.maxSpeed);
+    }
+    ship.position.add(velocity);
+
+    // Update cameras
+    if (viewMode === 'external') {
+      const cameraOffset = new THREE.Vector3(0, 6, 6);
+      cameraOffset.applyQuaternion(ship.quaternion);
+      const targetPos = ship.position.clone().add(cameraOffset);
+      camera.position.lerp(targetPos, 0.08);
+      camera.lookAt(ship.position);
+    } else {
+      // Cockpit view - position camera at pilot seat
+      const seatPosition = ship.position.clone();
+      const seatOffset = new THREE.Vector3(0, 0, -0.7 * shipTypes[selectedShipType].size);
+      seatOffset.applyQuaternion(ship.quaternion);
+      seatPosition.add(seatOffset);
+      
+      cockpitCamera.position.copy(seatPosition);
+      cockpitCamera.quaternion.copy(ship.quaternion);
+      
+      // Update HUD displays
+      const hudData = cockpitCamera.children[0]?.userData;
+      if (hudData) {
+        updateRadar(hudData.radarCanvas, ship.position);
+        hudData.radarTexture.needsUpdate = true;
+        
+        // Update navigation display
+        updateNavDisplay(hudData.navCanvas, ship);
+        hudData.navTexture.needsUpdate = true;
+      }
+    }
+
+    // Environmental hazard effects
+    let radiation = 0;
+    let temperature = 20;
+    let warnings = [];
+
+    hazardsRef.current.forEach(hazard => {
+      const distance = ship.position.distanceTo(hazard.position);
+      if (distance < hazard.radius) {
+        const effect = (hazard.radius - distance) / hazard.radius * hazard.intensity;
+        
+        if (hazard.type === 'solar_flare') {
+          radiation += effect * 0.5;
+          temperature += effect * 200;
+          warnings.push('Solar flare detected!');
+        } else if (hazard.type === 'radiation_belt') {
+          radiation += effect * 0.3;
+          warnings.push('High radiation zone!');
+        }
+      }
+    });
+
+    // Planet-based environmental effects
+    Object.entries(planetsRef.current).forEach(([key, planet]) => {
+      const distance = ship.position.distanceTo(planet.position);
+      const planetRadius = planetData[key].size * 5;
+      
+      if (distance < planetRadius) {
+        const effect = (planetRadius - distance) / planetRadius;
+        radiation += planetData[key].radiationLevel * effect * 0.1;
+        temperature += (planetData[key].temperature - 20) * effect * 0.05;
+      }
+    });
+
+    setEnvironmentalWarnings(warnings);
+
+    // Update ship stats
+    setShipStats(prev => ({
+      speed: Math.round(velocity.length() * 100) / 100,
+      position: {
+        x: Math.round(ship.position.x),
+        y: Math.round(ship.position.y),
+        z: Math.round(ship.position.z)
+      },
+      fuel: Math.max(0, prev.fuel - (keys['Space'] && !autopilotActive ? config.fuelCapacity * 0.0001 : 0)),
+      hull: Math.max(0, prev.hull - radiation * 0.1),
+      radiation: Math.min(100, radiation * 100),
+      temperature: Math.round(temperature)
+    }));
+
+    // Check planet proximity
+    let closestPlanet = null;
+    let closestDistance = Infinity;
+
+    Object.entries(planetsRef.current).forEach(([key, planet]) => {
+      const distance = ship.position.distanceTo(planet.position);
+      const detectionRange = planetData[key].size * 8 + 10;
+      if (distance < detectionRange && distance < closestDistance) {
+        closestPlanet = key;
+        closestDistance = distance;
+      }
+    });
+
+    // Show planet info when approaching a new planet
+    if (closestPlanet !== currentPlanet) {
+      setCurrentPlanet(closestPlanet);
+      if (closestPlanet) {
+        setPlanetInfoVisible(true);
+      }
+    } else if (!closestPlanet) {
+      setCurrentPlanet(null);
+      setPlanetInfoVisible(false);
+    }
+  }, [selectedShipType, viewMode, updateAutopilot, autopilotActive, shipStats.fuel, updateRadar, updateNavDisplay]);
+
+  const animate = useCallback(() => {
+    if (!rendererRef.current || !sceneRef.current) return;
+
+    timeRef.current += 0.008;
+    updateShip();
+
+    // Update active camera
+    const activeCamera = viewMode === 'external' ? cameraRef.current : cockpitCameraRef.current;
+    if (!activeCamera) return;
+
+    // Enhanced planet animations with realistic scaling
+    Object.entries(planetsRef.current).forEach(([key, planet]) => {
+      planet.rotation.y += 0.003 + (Math.random() * 0.0005);
+      
+      if (shipRef.current) {
+        const distance = shipRef.current.position.distanceTo(planet.position);
+        const baseSize = planetData[key].size;
+        const minDistance = 5;
+        const maxDistance = 100;
+        const scaleFactor = Math.max(0.3, Math.min(2.5, (maxDistance / Math.max(distance, minDistance)) * 0.8 + 0.2));
+        
+        planet.scale.setScalar(scaleFactor);
+        
+        if (planet.orbit) {
+          planet.orbit.scale.setScalar(scaleFactor * 0.5 + 0.5);
+        }
+        
+        // Scale and position moons
+        if (moonsRef.current[key]) {
+          moonsRef.current[key].forEach(moonObj => {
+            const { mesh, data } = moonObj;
+            const angle = timeRef.current * data.speed;
+            const moonScale = scaleFactor * 0.8;
+            mesh.scale.setScalar(moonScale);
+            
+            const orbitDistance = data.distance * scaleFactor;
+            mesh.position.x = planet.position.x + Math.cos(angle) * orbitDistance;
+            mesh.position.z = planet.position.z + Math.sin(angle) * orbitDistance;
+            mesh.position.y = planet.position.y + Math.sin(angle * 0.3) * 0.5 * scaleFactor;
+            mesh.rotation.y += 0.015;
+          });
+        }
+      }
+    });
+
+    // Update environmental hazards
+    hazardsRef.current.forEach(hazard => {
+      hazard.age++;
+      if (hazard.age > hazard.duration) {
+        hazard.age = 0;
+        // Respawn hazard
+        const angle = Math.random() * Math.PI * 2;
+        if (hazard.type === 'solar_flare') {
+          const distance = 15 + Math.random() * 20;
+          hazard.position.set(
+            Math.cos(angle) * distance,
+            (Math.random() - 0.5) * 10,
+            Math.sin(angle) * distance
+          );
+        }
+      }
+    });
+
+    // Animate spacecraft effects
+    if (shipRef.current && shipRef.current.userData) {
+      const userData = shipRef.current.userData;
+      const keys = keysRef.current;
+      const isThrusting = keys['Space'];
+      
+      // Animate engine glow
+      if (userData.engineGlow) {
+        userData.engineGlow.material.opacity = isThrusting ? 
+          0.9 + Math.sin(timeRef.current * 20) * 0.3 : 0.4;
+        userData.engineGlow.scale.setScalar(isThrusting ? 
+          1.5 + Math.sin(timeRef.current * 15) * 0.4 : 1.0);
+      }
+      
+      // Animate navigation lights
+      if (userData.navLights) {
+        userData.navLights.forEach((light, index) => {
+          const blinkSpeed = 2 + index * 0.5;
+          const intensity = 1.5 + Math.sin(timeRef.current * blinkSpeed) * 1.0;
+          light.material.emissiveIntensity = intensity;
+          if (light.children[0]) {
+            light.children[0].intensity = intensity * 0.5;
+          }
+        });
+      }
+      
+      // Animate ship lighting
+      if (userData.shipLight) {
+        userData.shipLight.intensity = 2.5 + Math.sin(timeRef.current * 4) * 0.5;
+      }
+    }
+
+    rendererRef.current.render(sceneRef.current, activeCamera);
+    animationRef.current = requestAnimationFrame(animate);
+  }, [updateShip, viewMode]);
+
+  const handleResize = useCallback(() => {
+    if (!cameraRef.current || !cockpitCameraRef.current || !rendererRef.current) return;
+    
+    const aspect = window.innerWidth / window.innerHeight;
+    cameraRef.current.aspect = aspect;
+    cameraRef.current.updateProjectionMatrix();
+    cockpitCameraRef.current.aspect = aspect;
+    cockpitCameraRef.current.updateProjectionMatrix();
+    rendererRef.current.setSize(window.innerWidth, window.innerHeight);
+  }, []);
+
+  // Environmental hazard system
+  const createEnvironmentalHazards = useCallback(() => {
+    const hazards = [];
+    
+    // Solar flares near the sun
+    for (let i = 0; i < 5; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const distance = 15 + Math.random() * 20;
+      const hazard = {
+        type: 'solar_flare',
+        position: new THREE.Vector3(
+          Math.cos(angle) * distance,
+          (Math.random() - 0.5) * 10,
+          Math.sin(angle) * distance
+        ),
+        radius: 8 + Math.random() * 5,
+        intensity: 0.8 + Math.random() * 0.4,
+        duration: 300 + Math.random() * 200,
+        age: 0
+      };
+      hazards.push(hazard);
+    }
+    
+    // Radiation belts around Jupiter
+    for (let i = 0; i < 3; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const distance = 125 + Math.random() * 15;
+      const hazard = {
+        type: 'radiation_belt',
+        position: new THREE.Vector3(
+          120 + Math.cos(angle) * distance,
+          (Math.random() - 0.5) * 20,
+          Math.sin(angle) * distance
+        ),
+        radius: 12 + Math.random() * 8,
+        intensity: 0.6 + Math.random() * 0.3,
+        duration: 1000,
+        age: 0
+      };
+      hazards.push(hazard);
+    }
+    
+    return hazards;
+  }, []);
+
+  // Autopilot system
+  const engageAutopilot = useCallback((targetKey) => {
+    if (planetsRef.current[targetKey]) {
+      setAutopilotTarget(targetKey);
+      setAutopilotActive(true);
+    }
+  }, []);
+
+  const updateAutopilot = useCallback(() => {
+    if (!autopilotActive || !autopilotTarget || !shipRef.current) return;
+    
+    const target = planetsRef.current[autopilotTarget];
+    if (!target) return;
+    
+    const ship = shipRef.current;
+    const targetPos = target.position.clone();
+    const shipPos = ship.position.clone();
+    const direction = targetPos.sub(shipPos).normalize();
+    const distance = ship.position.distanceTo(target.position);
+    
+    // Simple autopilot - fly towards target
+    if (distance > 20) {
+      const config = shipTypes[selectedShipType];
+      const velocity = velocityRef.current;
+      direction.multiplyScalar(config.acceleration * 0.5);
+      velocity.add(direction);
+      
+      // Auto-orient ship towards target
+      ship.lookAt(target.position);
+    } else {
+      setAutopilotActive(false);
+      setAutopilotTarget(null);
+    }
+  // Create cockpit HUD elements
+  const createCockpitHUD = () => {
+    const hudGroup = new THREE.Group();
+    
+    // Radar screen (positioned to match cockpit)
+    const radarGeometry = new THREE.PlaneGeometry(0.8, 0.8);
+    const radarCanvas = document.createElement('canvas');
+    radarCanvas.width = 512;
+    radarCanvas.height = 512;
+    const radarTexture = new THREE.CanvasTexture(radarCanvas);
+    
+    const radarMaterial = new THREE.MeshBasicMaterial({
+      map: radarTexture,
+      transparent: true,
+      opacity: 0.9
+    });
+    const radarScreen = new THREE.Mesh(radarGeometry, radarMaterial);
+    radarScreen.position.set(-1.5, 0.2, -2);
+    radarScreen.lookAt(0, 0, 0);
+    hudGroup.add(radarScreen);
+    
+    // Navigation display (larger for better visibility)
+    const navGeometry = new THREE.PlaneGeometry(1.8, 0.9);
+    const navCanvas = document.createElement('canvas');
+    navCanvas.width = 512;
+    navCanvas.height = 256;
+    const navTexture = new THREE.CanvasTexture(navCanvas);
+    
+    const navMaterial = new THREE.MeshBasicMaterial({
+      map: navTexture,
+      transparent: true,
+      opacity: 0.95
+    });
+    const navScreen = new THREE.Mesh(navGeometry, navMaterial);
+    navScreen.position.set(0, -0.3, -2.2);
+    navScreen.lookAt(0, 0, 0);
+    hudGroup.add(navScreen);
+    
+    // Crosshair overlay
+    const crosshairGeometry = new THREE.PlaneGeometry(0.1, 0.1);
+    const crosshairCanvas = document.createElement('canvas');
+    crosshairCanvas.width = 64;
+    crosshairCanvas.height = 64;
+    const crosshairCtx = crosshairCanvas.getContext('2d');
+    
+    // Draw crosshair
+    crosshairCtx.strokeStyle = '#ff0000';
+    crosshairCtx.lineWidth = 2;
+    crosshairCtx.beginPath();
+    crosshairCtx.moveTo(32, 16);
+    crosshairCtx.lineTo(32, 48);
+    crosshairCtx.moveTo(16, 32);
+    crosshairCtx.lineTo(48, 32);
+    crosshairCtx.stroke();
+    
+    const crosshairTexture = new THREE.CanvasTexture(crosshairCanvas);
+    const crosshairMaterial = new THREE.MeshBasicMaterial({
+      map: crosshairTexture,
+      transparent: true,
+      depthTest: false
+    });
+    const crosshair = new THREE.Mesh(crosshairGeometry, crosshairMaterial);
+    crosshair.position.set(0, 0, -1.5);
+    hudGroup.add(crosshair);
+    
+    hudGroup.userData = {
+      radarCanvas: radarCanvas,
+      radarTexture: radarTexture,
+      navCanvas: navCanvas,
+      navTexture: navTexture
+    };
+    
+    return hudGroup;
+  };
+
+  // Update radar display
+  const updateRadar = useCallback((radarCanvas, shipPosition) => {
+    const ctx = radarCanvas.getContext('2d');
+    ctx.fillStyle = 'rgba(0, 20, 40, 0.9)';
+    ctx.fillRect(0, 0, 512, 512);
+    
+    // Draw radar grid
+    ctx.strokeStyle = 'rgba(0, 255, 100, 0.3)';
+    ctx.lineWidth = 1;
+    
+    // Concentric circles
+    for (let i = 1; i <= 4; i++) {
+      ctx.beginPath();
+      ctx.arc(256, 256, i * 64, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    
+    // Cross-hairs
+    ctx.beginPath();
+    ctx.moveTo(256, 0);
+    ctx.lineTo(256, 512);
+    ctx.moveTo(0, 256);
+    ctx.lineTo(512, 256);
+    ctx.stroke();
+    
+    // Draw planets as radar blips
+    const radarRange = 200;
+    Object.entries(planetsRef.current).forEach(([key, planet]) => {
+      const distance = shipPosition.distanceTo(planet.position);
+      if (distance < radarRange) {
+        const relativePos = planet.position.clone().sub(shipPosition);
+        const radarX = 256 + (relativePos.x / radarRange) * 200;
+        const radarY = 256 + (relativePos.z / radarRange) * 200;
+        
+        if (radarX >= 0 && radarX <= 512 && radarY >= 0 && radarY <= 512) {
+          ctx.fillStyle = key === 'sun' ? '#ffaa00' : '#00aaff';
+          ctx.beginPath();
+          ctx.arc(radarX, radarY, planetData[key].size * 2 + 3, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // Label
+          ctx.fillStyle = '#ffffff';
+          ctx.font = '10px monospace';
+          ctx.fillText(planetData[key].name.substring(0, 3), radarX + 8, radarY);
+        }
+      }
+    });
+    
+    // Draw ship at center
+    ctx.fillStyle = '#ff0000';
+    ctx.beginPath();
+    ctx.arc(256, 256, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }, []);
+
+  // Update navigation display
+  const updateNavDisplay = useCallback((navCanvas, ship) => {
+    const ctx = navCanvas.getContext('2d');
+    ctx.fillStyle = 'rgba(0, 15, 30, 0.95)';
+    ctx.fillRect(0, 0, 512, 256);
+    
+    // Header
+    ctx.fillStyle = '#00ff88';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText('NAVIGATION COMPUTER', 10, 25);
+    
+    // Ship status
+    ctx.font = '12px monospace';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(`SHIP: ${shipTypes[selectedShipType].name.toUpperCase()}`, 10, 50);
+    ctx.fillText(`SPEED: ${shipStats.speed.toFixed(2)} c/s`, 10, 70);
+    ctx.fillText(`FUEL: ${Math.round(shipStats.fuel)}%`, 10, 90);
+    ctx.fillText(`HULL: ${Math.round(shipStats.hull)}%`, 10, 110);
+    
+    // Environmental status
+    ctx.fillStyle = shipStats.radiation > 50 ? '#ff4444' : '#44ff44';
+    ctx.fillText(`RADIATION: ${Math.round(shipStats.radiation)}%`, 10, 130);
+    ctx.fillStyle = Math.abs(shipStats.temperature - 20) > 100 ? '#ff4444' : '#44ff44';
+    ctx.fillText(`TEMP: ${shipStats.temperature}°C`, 10, 150);
+    
+    // Autopilot status
+    if (autopilotActive && autopilotTarget) {
+      ctx.fillStyle = '#ffff00';
+      ctx.fillText('AUTOPILOT ENGAGED', 280, 50);
+      ctx.fillText(`TARGET: ${planetData[autopilotTarget].name.toUpperCase()}`, 280, 70);
+      const distance = ship.position.distanceTo(planetsRef.current[autopilotTarget].position);
+      ctx.fillText(`DISTANCE: ${distance.toFixed(1)}`, 280, 90);
+    } else {
+      ctx.fillStyle = '#888888';
+      ctx.fillText('MANUAL CONTROL', 280, 50);
+    }
+    
+    // Current planet info
+    if (currentPlanet) {
+      ctx.fillStyle = '#ff8800';
+      ctx.fillText('PROXIMITY ALERT', 280, 130);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(`NEAR: ${planetData[currentPlanet].name.toUpperCase()}`, 280, 150);
+    }
+    
+    // Warning messages
+    if (environmentalWarnings.length > 0) {
+      ctx.fillStyle = '#ff0000';
+      ctx.font = 'bold 12px monospace';
+      environmentalWarnings.forEach((warning, index) => {
+        ctx.fillText(`⚠ ${warning.toUpperCase()}`, 10, 180 + (index * 20));
+      });
+    }
+    
+    // Grid lines
+    ctx.strokeStyle = 'rgba(0, 255, 136, 0.2)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(260, 0);
+    ctx.lineTo(260, 256);
+    ctx.stroke();
+    
+  }, [selectedShipType, shipStats, autopilotActive, autopilotTarget, currentPlanet, environmentalWarnings]);
+
+  // Advanced procedural texture generation
+  const createAdvancedTexture = (type, size = 512) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+
+    switch (type) {
+      case 'earth':
+        const gradient = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+        gradient.addColorStop(0, '#4A90E2');
+        gradient.addColorStop(0.7, '#2E5BDA');
+        gradient.addColorStop(1, '#1B3A8C');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, size, size);
+
+        ctx.fillStyle = '#228B22';
+        for (let i = 0; i < 25; i++) {
+          ctx.beginPath();
+          ctx.ellipse(
+            Math.random() * size,
+            Math.random() * size,
+            Math.random() * 60 + 20,
+            Math.random() * 40 + 15,
+            Math.random() * Math.PI,
+            0, Math.PI * 2
+          );
+          ctx.fill();
+        }
+
+        ctx.fillStyle = '#F0F8FF';
+        ctx.beginPath();
+        ctx.ellipse(size/2, 20, 80, 30, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(size/2, size-20, 80, 30, 0, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+
+      case 'mars':
+        ctx.fillStyle = '#CD5C5C';
+        ctx.fillRect(0, 0, size, size);
+        
+        ctx.fillStyle = '#A0522D';
+        for (let i = 0; i < 30; i++) {
+          ctx.beginPath();
+          ctx.arc(Math.random() * size, Math.random() * size, Math.random() * 20 + 5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.fillStyle = '#FFFAF0';
+        ctx.beginPath();
+        ctx.ellipse(size/2, 15, 40, 15, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(size/2, size-15, 40, 15, 0, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+
+      case 'jupiter':
+        for (let y = 0; y < size; y++) {
+          const band = Math.sin(y / size * Math.PI * 8) * 0.3 + 0.7;
+          const hue = 30 + Math.sin(y / size * Math.PI * 3) * 20;
+          ctx.fillStyle = `hsl(${hue}, 70%, ${band * 50 + 30}%)`;
+          ctx.fillRect(0, y, size, 1);
+        }
+
+        ctx.fillStyle = '#CD5C5C';
+        ctx.beginPath();
+        ctx.ellipse(size * 0.7, size * 0.6, 30, 20, 0, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+
+      default:
+        ctx.fillStyle = '#8C7853';
+        ctx.fillRect(0, 0, size, size);
+        
+        for (let i = 0; i < 20; i++) {
+          ctx.fillStyle = '#5D5D5D';
+          ctx.beginPath();
+          ctx.arc(Math.random() * size, Math.random() * size, Math.random() * 15 + 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+    }
+
+    return new THREE.CanvasTexture(canvas);
+  };
+
+  // Create PBR materials for planets
+  const createPBRMaterial = (planetKey, data) => {
+    if (planetKey === 'sun') {
+      return new THREE.MeshBasicMaterial({
+        color: data.color,
+        emissive: data.emissive,
+        emissiveIntensity: 1.0
+      });
+    }
+
+    const diffuseTexture = createAdvancedTexture(planetKey);
+    const material = new THREE.MeshStandardMaterial({
+      map: diffuseTexture,
+      roughness: data.type === 'gas' ? 0.1 : 0.8,
+      metalness: data.type === 'rocky' ? 0.1 : 0.0,
+    });
+
+    if (data.type === 'gas') {
+      material.emissive = new THREE.Color(data.color);
+      material.emissiveIntensity = 0.1;
+    }
+
+    return material;
+  };
+
+  // Initialize scene
+  const initScene = useCallback(async () => {
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 10000);
+    const cockpitCamera = new THREE.PerspectiveCamera(90, window.innerWidth / window.innerHeight, 0.1, 10000);
+    const renderer = new THREE.WebGLRenderer({ 
+      antialias: true,
+      powerPreference: "high-performance"
+    });
+    
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setClearColor(0x000000);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.physicallyCorrectLights = true;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    mountRef.current?.appendChild(renderer.domElement);
+
+    // Initialize FBX loader
+    initFBXLoader();
+
+    // Enhanced lighting
+    const sunLight = new THREE.DirectionalLight(0xffffff, 3.0);
+    sunLight.position.set(0, 0, 0);
+    sunLight.castShadow = true;
+    sunLight.shadow.mapSize.width = 4096;
+    sunLight.shadow.mapSize.height = 4096;
+    scene.add(sunLight);
+    
+    const ambientLight = new THREE.AmbientLight(0x6688AA, 0.4);
+    scene.add(ambientLight);
+
+    const sunGlow = new THREE.PointLight(0xffffff, 4.0, 300);
+    sunGlow.position.set(0, 0, 0);
+    scene.add(sunGlow);
+
+    // Enhanced starfield
+    const starSizes = [0.5, 1.0, 1.5, 2.0];
+    starSizes.forEach(size => {
+      const starsGeometry = new THREE.BufferGeometry();
+      const starsMaterial = new THREE.PointsMaterial({ 
+        color: 0xFFFFFF, 
+        size: size,
+        transparent: true,
+        opacity: 0.8,
+        sizeAttenuation: false
+      });
+      
+      const starsVertices = [];
+      const starCount = 1000 / starSizes.length;
+      
+      for (let i = 0; i < starCount; i++) {
+        starsVertices.push(
+          (Math.random() - 0.5) * 8000,
+          (Math.random() - 0.5) * 8000,
+          (Math.random() - 0.5) * 8000
+        );
+      }
+      
+      starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starsVertices, 3));
+      const stars = new THREE.Points(starsGeometry, starsMaterial);
+      scene.add(stars);
+    });
+
+    // Create spacecraft (now async)
+    const spacecraft = await createSpacecraft(selectedShipType, scene);
+    spacecraft.position.set(0, 0, 60);
+    scene.add(spacecraft);
+
+    // Create cockpit HUD
+    const cockpitHUD = createCockpitHUD();
+    cockpitCamera.add(cockpitHUD);
+    scene.add(cockpitCamera);
+
+    // Create planets
+    const planets = {};
+    const moons = {};
+    
+    Object.entries(planetData).forEach(([key, data]) => {
+      const geometry = new THREE.SphereGeometry(data.size, 64, 64);
+      const material = createPBRMaterial(key, data);
+      const planet = new THREE.Mesh(geometry, material);
+      
+      planet.position.set(data.distance, 0, 0);
+      planet.castShadow = key !== 'sun';
+      planet.receiveShadow = key !== 'sun';
+      planets[key] = planet;
+      scene.add(planet);
+
+      // Add moons
+      if (data.moons.length > 0) {
+        moons[key] = [];
+        data.moons.forEach(moonData => {
+          const moonGeometry = new THREE.SphereGeometry(moonData.size, 32, 32);
+          const moonMaterial = new THREE.MeshStandardMaterial({ color: moonData.color });
+          const moon = new THREE.Mesh(moonGeometry, moonMaterial);
+          moon.castShadow = true;
+          moon.receiveShadow = true;
+          scene.add(moon);
+          moons[key].push({ mesh: moon, data: moonData });
+        });
+      }
+
+      // Add orbital paths
+      if (key !== 'sun') {
+        const orbitGeometry = new THREE.RingGeometry(data.distance - 0.05, data.distance + 0.05, 128);
+        const orbitMaterial = new THREE.MeshBasicMaterial({ 
+          color: 0x444444, 
+          transparent: true, 
+          opacity: 0.15,
+          side: THREE.DoubleSide 
+        });
+        const orbit = new THREE.Mesh(orbitGeometry, orbitMaterial);
+        orbit.rotation.x = Math.PI / 2;
+        scene.add(orbit);
+        planets[key].orbit = orbit;
+      }
+    });
+
+    // Initialize environmental hazards
+    const hazards = createEnvironmentalHazards();
+    hazardsRef.current = hazards;
+
+    // Position cameras
+    camera.position.set(0, 5, 65);
+    camera.lookAt(spacecraft.position);
+    cockpitCamera.position.copy(spacecraft.position);
+
+    // Store refs
+    sceneRef.current = scene;
+    rendererRef.current = renderer;
+    cameraRef.current = camera;
+    cockpitCameraRef.current = cockpitCamera;
+    shipRef.current = spacecraft;
+    planetsRef.current = planets;
+    moonsRef.current = moons;
+
+    return { scene, camera, cockpitCamera, renderer, ship: spacecraft, planets, moons };
+  }, [selectedShipType, createEnvironmentalHazards, initFBXLoader, createSpacecraft]);
+
+  const handleKeyDown = useCallback((event) => {
+    keysRef.current[event.code] = true;
+    
+    // View mode toggle
+    if (event.code === 'KeyV') {
+      setViewMode(prev => prev === 'external' ? 'cockpit' : 'external');
+    }
+    
+    // Toggle planet info visibility
+    if (event.code === 'KeyI') {
+      setPlanetInfoVisible(prev => !prev);
+    }
+    
+    // Autopilot controls
+    if (event.code === 'Digit1') engageAutopilot('mercury');
+    if (event.code === 'Digit2') engageAutopilot('venus');
+    if (event.code === 'Digit3') engageAutopilot('earth');
+    if (event.code === 'Digit4') engageAutopilot('mars');
+    if (event.code === 'Digit5') engageAutopilot('jupiter');
+    if (event.code === 'Digit6') engageAutopilot('saturn');
+    if (event.code === 'Digit7') engageAutopilot('uranus');
+    if (event.code === 'Digit8') engageAutopilot('neptune');
+    if (event.code === 'KeyX') {
+      setAutopilotActive(false);
+      setAutopilotTarget(null);
+    }
+  }, [engageAutopilot]);
+
+  const handleKeyUp = useCallback((event) => {
+    keysRef.current[event.code] = false;
+  }, []);
+
+  const updateShip = useCallback(() => {
+    if (!shipRef.current || !cameraRef.current || !cockpitCameraRef.current) return;
+
+    const ship = shipRef.current;
+    const camera = cameraRef.current;
+    const cockpitCamera = cockpitCameraRef.current;
+    const velocity = velocityRef.current;
+    const keys = keysRef.current;
+    const config = shipTypes[selectedShipType];
+
+    // Update autopilot
+    updateAutopilot();
+
+    // Ship controls (disabled during autopilot)
+    if (!autopilotActive) {
+      const rotationSpeed = 0.025;
+
+      if (keys['KeyA'] || keys['ArrowLeft']) ship.rotation.z += rotationSpeed;
+      if (keys['KeyD'] || keys['ArrowRight']) ship.rotation.z -= rotationSpeed;
+      if (keys['KeyW'] || keys['ArrowUp']) ship.rotation.x -= rotationSpeed;
+      if (keys['KeyS'] || keys['ArrowDown']) ship.rotation.x += rotationSpeed;
+
+      // Thrust
+      const isThrusting = keys['Space'];
+      if (isThrusting && shipStats.fuel > 0) {
+        const forward = new THREE.Vector3(0, 0, -1);
+        forward.applyQuaternion(ship.quaternion);
+        forward.multiplyScalar(config.acceleration);
+        velocity.add(forward);
+      }
+    }
+
+    // Apply physics
+    velocity.multiplyScalar(0.985);
+    if (velocity.length() > config.maxSpeed) {
+      velocity.normalize().multiplyScalar(config.maxSpeed);
+    }
+    ship.position.add(velocity);
+
+    // Update cameras
+    if (viewMode === 'external') {
+      const cameraOffset = new THREE.Vector3(0, 6, 6);
+      cameraOffset.applyQuaternion(ship.quaternion);
+      const targetPos = ship.position.clone().add(cameraOffset);
+      camera.position.lerp(targetPos, 0.08);
+      camera.lookAt(ship.position);
+    } else {
+      // Cockpit view - position camera at pilot seat
+      const seatPosition = ship.position.clone();
+      const seatOffset = new THREE.Vector3(0, 0, -0.7 * shipTypes[selectedShipType].size);
+      seatOffset.applyQuaternion(ship.quaternion);
+      seatPosition.add(seatOffset);
+      
+      cockpitCamera.position.copy(seatPosition);
+      cockpitCamera.quaternion.copy(ship.quaternion);
+      
+      // Update HUD displays
+      const hudData = cockpitCamera.children[0]?.userData;
+      if (hudData) {
+        updateRadar(hudData.radarCanvas, ship.position);
+        hudData.radarTexture.needsUpdate = true;
+        
+        // Update navigation display
+        updateNavDisplay(hudData.navCanvas, ship);
+        hudData.navTexture.needsUpdate = true;
+      }
+    }
+
+    // Environmental hazard effects
+    let radiation = 0;
+    let temperature = 20;
+    let warnings = [];
+
+    hazardsRef.current.forEach(hazard => {
+      const distance = ship.position.distanceTo(hazard.position);
+      if (distance < hazard.radius) {
+        const effect = (hazard.radius - distance) / hazard.radius * hazard.intensity;
+        
+        if (hazard.type === 'solar_flare') {
+          radiation += effect * 0.5;
+          temperature += effect * 200;
+          warnings.push('Solar flare detected!');
+        } else if (hazard.type === 'radiation_belt') {
+          radiation += effect * 0.3;
+          warnings.push('High radiation zone!');
+        }
+      }
+    });
+
+    // Planet-based environmental effects
+    Object.entries(planetsRef.current).forEach(([key, planet]) => {
+      const distance = ship.position.distanceTo(planet.position);
+      const planetRadius = planetData[key].size * 5;
+      
+      if (distance < planetRadius) {
+        const effect = (planetRadius - distance) / planetRadius;
+        radiation += planetData[key].radiationLevel * effect * 0.1;
+        temperature += (planetData[key].temperature - 20) * effect * 0.05;
+      }
+    });
+
+    setEnvironmentalWarnings(warnings);
+
+    // Update ship stats
+    setShipStats(prev => ({
+      speed: Math.round(velocity.length() * 100) / 100,
+      position: {
+        x: Math.round(ship.position.x),
+        y: Math.round(ship.position.y),
+        z: Math.round(ship.position.z)
+      },
+      fuel: Math.max(0, prev.fuel - (keys['Space'] && !autopilotActive ? config.fuelCapacity * 0.0001 : 0)),
+      hull: Math.max(0, prev.hull - radiation * 0.1),
+      radiation: Math.min(100, radiation * 100),
+      temperature: Math.round(temperature)
+    }));
+
+    // Check planet proximity
+    let closestPlanet = null;
+    let closestDistance = Infinity;
+
+    Object.entries(planetsRef.current).forEach(([key, planet]) => {
+      const distance = ship.position.distanceTo(planet.position);
+      const detectionRange = planetData[key].size * 8 + 10;
+      if (distance < detectionRange && distance < closestDistance) {
+        closestPlanet = key;
+        closestDistance = distance;
+      }
+    });
+
+    // Show planet info when approaching a new planet
+    if (closestPlanet !== currentPlanet) {
+      setCurrentPlanet(closestPlanet);
+      if (closestPlanet) {
+        setPlanetInfoVisible(true);
+      }
+    } else if (!closestPlanet) {
+      setCurrentPlanet(null);
+      setPlanetInfoVisible(false);
+    }
+  }, [selectedShipType, viewMode, updateAutopilot, autopilotActive, shipStats.fuel, updateRadar]);
+
+  const animate = useCallback(() => {
+    if (!rendererRef.current || !sceneRef.current) return;
+
+    timeRef.current += 0.008;
+    updateShip();
+
+    // Update active camera
+    const activeCamera = viewMode === 'external' ? cameraRef.current : cockpitCameraRef.current;
+    if (!activeCamera) return;
+
+    // Enhanced planet animations with realistic scaling
+    Object.entries(planetsRef.current).forEach(([key, planet]) => {
+      planet.rotation.y += 0.003 + (Math.random() * 0.0005);
+      
+      if (shipRef.current) {
+        const distance = shipRef.current.position.distanceTo(planet.position);
+        const baseSize = planetData[key].size;
+        const minDistance = 5;
+        const maxDistance = 100;
+        const scaleFactor = Math.max(0.3, Math.min(2.5, (maxDistance / Math.max(distance, minDistance)) * 0.8 + 0.2));
+        
+        planet.scale.setScalar(scaleFactor);
+        
+        if (planet.orbit) {
+          planet.orbit.scale.setScalar(scaleFactor * 0.5 + 0.5);
+        }
+        
+        // Scale and position moons
+        if (moonsRef.current[key]) {
+          moonsRef.current[key].forEach(moonObj => {
+            const { mesh, data } = moonObj;
+            const angle = timeRef.current * data.speed;
+            const moonScale = scaleFactor * 0.8;
+            mesh.scale.setScalar(moonScale);
+            
+            const orbitDistance = data.distance * scaleFactor;
+            mesh.position.x = planet.position.x + Math.cos(angle) * orbitDistance;
+            mesh.position.z = planet.position.z + Math.sin(angle) * orbitDistance;
+            mesh.position.y = planet.position.y + Math.sin(angle * 0.3) * 0.5 * scaleFactor;
+            mesh.rotation.y += 0.015;
+          });
+        }
+      }
+    });
+
+    // Update environmental hazards
+    hazardsRef.current.forEach(hazard => {
+      hazard.age++;
+      if (hazard.age > hazard.duration) {
+        hazard.age = 0;
+        // Respawn hazard
+        const angle = Math.random() * Math.PI * 2;
+        if (hazard.type === 'solar_flare') {
+          const distance = 15 + Math.random() * 20;
+          hazard.position.set(
+            Math.cos(angle) * distance,
+            (Math.random() - 0.5) * 10,
+            Math.sin(angle) * distance
+          );
+        }
+      }
+    });
+
+    rendererRef.current.render(sceneRef.current, activeCamera);
+    animationRef.current = requestAnimationFrame(animate);
+  }, [updateShip, viewMode]);
+
+  const handleResize = useCallback(() => {
+    if (!cameraRef.current || !cockpitCameraRef.current || !rendererRef.current) return;
+    
+    const aspect = window.innerWidth / window.innerHeight;
+    cameraRef.current.aspect = aspect;
+    cameraRef.current.updateProjectionMatrix();
+    cockpitCameraRef.current.aspect = aspect;
+    cockpitCameraRef.current.updateProjectionMatrix();
+    rendererRef.current.setSize(window.innerWidth, window.innerHeight);
+  }, []);
+
+  useEffect(() => {
+    const initialize = async () => {
+      try {
+        await initScene();
+        animate();
+      } catch (error) {
+        console.error('Failed to initialize scene:', error);
+        setModelLoadError('Failed to initialize scene');
+      }
+    };
+
+    initialize();
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('resize', handleResize);
+      
+      if (mountRef.current && rendererRef.current) {
+        mountRef.current.removeChild(rendererRef.current.domElement);
+      }
+    };
+  }, [initScene, animate, handleKeyDown, handleKeyUp, handleResize]);
+
+  // Ship selection handler
+  const handleShipChange = async (shipType) => {
+    if (modelLoading) return; // Prevent changes while loading
+    
+    setSelectedShipType(shipType);
+    setShipStats(prev => ({
+      ...prev,
+      fuel: shipTypes[shipType].fuelCapacity,
+      hull: shipTypes[shipType].hullStrength
+    }));
+    
+    // Recreate ship
+    if (sceneRef.current && shipRef.current) {
+      const currentPosition = shipRef.current.position.clone();
+      const currentRotation = shipRef.current.quaternion.clone();
+      
+      sceneRef.current.remove(shipRef.current);
+      
+      try {
+        const newShip = await createSpacecraft(shipType, sceneRef.current);
+        newShip.position.copy(currentPosition);
+        newShip.quaternion.copy(currentRotation);
+        sceneRef.current.add(newShip);
+        shipRef.current = newShip;
+      } catch (error) {
+        console.error('Failed to create new ship:', error);
+        setModelLoadError('Failed to create new ship');
+      }
+    }
+  };
+
+  return (
+    <div className="relative w-full h-screen overflow-hidden bg-black">
+      <div ref={mountRef} className="w-full h-full" />
+      
+      {/* Ship Selection Panel */}
+      <div className="absolute top-4 left-4 text-white font-mono text-xs bg-gradient-to-br from-black/90 to-gray-900/70 p-4 rounded-xl border border-cyan-500/30 backdrop-blur-sm max-w-xs">
+        <div className="text-cyan-400 font-bold mb-3 flex items-center">
+          <div className="w-2 h-2 bg-cyan-400 rounded-full mr-2 animate-pulse"></div>
+          SHIP SELECTION
+          {modelLoading && <div className="ml-2 text-yellow-400 text-xs">Loading...</div>}
+        </div>
+        
+        {modelLoadError && (
+          <div className="bg-red-900/50 p-2 rounded mb-3 text-red-300 text-xs">
+            ⚠️ {modelLoadError}
+          </div>
+        )}
+        
+        <div className="space-y-2">
+          {Object.entries(shipTypes).map(([key, config]) => (
+            <button
+              key={key}
+              onClick={() => handleShipChange(key)}
+              disabled={modelLoading}
+              className={`w-full text-left p-2 rounded transition-all ${
+                selectedShipType === key 
+                  ? 'bg-cyan-500/20 border border-cyan-400' 
+                  : 'bg-gray-800/50 hover:bg-gray-700/50 border border-gray-600'
+              } ${modelLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <div className="font-semibold text-sm flex items-center">
+                {config.name}
+                {config.type === 'custom' && <span className="ml-1 text-green-400">🚀</span>}
+                {key === 'fighter' && modelLoading && <div className="ml-2 w-3 h-3 border border-yellow-400 border-t-transparent rounded-full animate-spin"></div>}
+              </div>
+              <div className="text-xs text-gray-300">{config.description}</div>
+              <div className="text-xs mt-1 flex justify-between">
+                <span>Speed: {config.maxSpeed}</span>
+                <span>Fuel: {config.fuelCapacity}</span>
+              </div>
+              {config.type === 'custom' && (
+                <div className="text-xs text-green-400 mt-1">Custom FBX Model</div>
+              )}
+            </button>
+          ))}
+        </div>
+        
+        {selectedShipType === 'fighter' && !modelLoadError && (
+          <div className="mt-3 p-2 bg-green-900/30 rounded border border-green-500/30">
+            <div className="text-green-400 font-bold text-xs mb-1">HUSSAM ZAID FIGHTER</div>
+            <div className="text-xs text-green-300">Custom military-grade spacecraft loaded from your GitHub repository!</div>
+          </div>
+        )}
+      </div>
+
+      {/* Advanced HUD */}
+      <div className="absolute top-4 right-4 text-white font-mono text-sm bg-gradient-to-br from-black/90 to-gray-900/70 p-5 rounded-xl border border-blue-500/30 backdrop-blur-sm">
+        <div className="text-blue-400 font-bold mb-3 flex items-center">
+          <div className="w-2 h-2 bg-green-400 rounded-full mr-2 animate-pulse"></div>
+          {shipTypes[selectedShipType].name.toUpperCase()}
+        </div>
+        <div className="space-y-1 text-xs">
+          <div className="flex justify-between">
+            <span className="text-gray-300">Velocity:</span>
+            <span className="text-green-400">{shipStats.speed} c/s</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-300">Fuel:</span>
+            <span className={shipStats.fuel > 20 ? "text-green-400" : "text-red-400"}>
+              {Math.round(shipStats.fuel)}%
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-300">Hull:</span>
+            <span className={shipStats.hull > 50 ? "text-green-400" : "text-red-400"}>
+              {Math.round(shipStats.hull)}%
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-300">Radiation:</span>
+            <span className={shipStats.radiation < 50 ? "text-green-400" : "text-red-400"}>
+              {Math.round(shipStats.radiation)}%
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-300">Temp:</span>
+            <span className="text-blue-300">{shipStats.temperature}°C</span>
+          </div>
+        </div>
+        
+        <div className="mt-3 pt-2 border-t border-gray-600">
+          <div className="text-yellow-400 text-xs mb-1">VIEW MODE: {viewMode.toUpperCase()}</div>
+          <div className="text-gray-400 text-xs">Press V to toggle</div>
+        </div>
+        
+        {autopilotActive && (
+          <div className="mt-2 pt-2 border-t border-gray-600">
+            <div className="text-green-400 text-xs flex items-center">
+              <div className="w-1 h-1 bg-green-400 rounded-full mr-2 animate-pulse"></div>
+              AUTOPILOT → {planetData[autopilotTarget]?.name}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Navigation Panel */}
+      <div className="absolute bottom-4 left-4 text-white font-mono text-xs bg-gradient-to-br from-black/90 to-gray-900/70 p-4 rounded-xl border border-purple-500/30 backdrop-blur-sm">
+        <div className="text-purple-400 font-bold mb-3 flex items-center">
+          <div className="w-2 h-2 bg-purple-400 rounded-full mr-2"></div>
+          NAVIGATION & AUTOPILOT
+        </div>
+        <div className="grid grid-cols-2 gap-1 text-xs">
+          <button onClick={() => engageAutopilot('mercury')} className="bg-orange-600/20 p-1 rounded hover:bg-orange-600/40">1-Mercury</button>
+          <button onClick={() => engageAutopilot('venus')} className="bg-yellow-600/20 p-1 rounded hover:bg-yellow-600/40">2-Venus</button>
+          <button onClick={() => engageAutopilot('earth')} className="bg-blue-600/20 p-1 rounded hover:bg-blue-600/40">3-Earth</button>
+          <button onClick={() => engageAutopilot('mars')} className="bg-red-600/20 p-1 rounded hover:bg-red-600/40">4-Mars</button>
+          <button onClick={() => engageAutopilot('jupiter')} className="bg-orange-500/20 p-1 rounded hover:bg-orange-500/40">5-Jupiter</button>
+          <button onClick={() => engageAutopilot('saturn')} className="bg-yellow-500/20 p-1 rounded hover:bg-yellow-500/40">6-Saturn</button>
+          <button onClick={() => engageAutopilot('uranus')} className="bg-cyan-600/20 p-1 rounded hover:bg-cyan-600/40">7-Uranus</button>
+          <button onClick={() => engageAutopilot('neptune')} className="bg-blue-700/20 p-1 rounded hover:bg-blue-700/40">8-Neptune</button>
+        </div>
+        <button 
+          onClick={() => {setAutopilotActive(false); setAutopilotTarget(null);}}
+          className="w-full mt-2 bg-red-600/20 p-1 rounded hover:bg-red-600/40 text-red-400"
+        >
+          X - Cancel Autopilot
+        </button>
+      </div>
+
+      {/* Environmental Warnings */}
+      {environmentalWarnings.length > 0 && (
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-white">
+          <div className="bg-red-900/90 p-4 rounded-xl border border-red-500 backdrop-blur-sm">
+            <div className="text-red-400 font-bold mb-2 flex items-center">
+              <div className="w-3 h-3 bg-red-500 rounded-full mr-2 animate-pulse"></div>
+              ⚠️ ENVIRONMENTAL HAZARD
+            </div>
+            {environmentalWarnings.map((warning, index) => (
+              <div key={index} className="text-red-200 text-sm">{warning}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Controls Panel */}
+      <div className="absolute bottom-4 right-4 text-white font-mono text-xs bg-gradient-to-br from-black/90 to-gray-900/70 p-4 rounded-xl border border-green-500/30 backdrop-blur-sm">
+        <div className="text-green-400 font-bold mb-2">🎮 ADVANCED CONTROLS</div>
+        <div className="space-y-1">
+          <div>WASD/Arrows: Maneuver</div>
+          <div>SPACE: Thrust</div>
+          <div>V: Toggle View Mode</div>
+          <div>I: Toggle Planet Info</div>
+          <div>1-8: Autopilot to Planet</div>
+          <div>X: Cancel Autopilot</div>
+        </div>
+        <div className="mt-2 pt-2 border-t border-gray-600">
+          <div className="text-yellow-400">Current Mode: {viewMode === 'external' ? '3rd Person' : 'Cockpit'}</div>
+          <div className="text-cyan-400">Planet Info: {planetInfoVisible ? 'Visible' : 'Hidden'}</div>
+        </div>
+      </div>
+
+      {/* Planet Information Panel */}
+      {currentPlanet && planetInfoVisible && (
+        <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 text-white bg-gradient-to-br from-black/90 to-gray-900/70 p-6 rounded-2xl max-w-2xl border border-purple-500/30 backdrop-blur-md shadow-2xl">
+          {/* Close Button */}
+          <button
+            onClick={() => setPlanetInfoVisible(false)}
+            className="absolute top-3 right-3 w-6 h-6 bg-red-500/20 hover:bg-red-500/40 rounded-full flex items-center justify-center text-red-400 hover:text-red-300 transition-all border border-red-500/30"
+            title="Close Planet Info (or press I)"
+          >
+            ×
+          </button>
+          
+          <div className="flex items-center mb-4">
+            <div className="w-3 h-3 bg-purple-400 rounded-full mr-3 animate-pulse"></div>
+            <h2 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-cyan-400">
+              {planetData[currentPlanet].name}
+            </h2>
+            <div className="ml-auto text-sm">
+              <div className="bg-yellow-600/20 px-3 py-1 rounded-full">
+                Temp: {planetData[currentPlanet].temperature}°C
+              </div>
+            </div>
+          </div>
+          
+          <p className="mb-4 text-sm leading-relaxed text-gray-200 bg-black/20 p-3 rounded-lg">
+            {planetData[currentPlanet].info}
+          </p>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-black/30 p-3 rounded-lg">
+              <div className="font-semibold text-green-400 mb-2">Scientific Data</div>
+              {planetData[currentPlanet].facts.map((fact, index) => (
+                <div key={index} className="text-gray-300 text-xs mb-1">• {fact}</div>
+              ))}
+            </div>
+            
+            <div className="bg-black/30 p-3 rounded-lg">
+              <div className="font-semibold text-red-400 mb-2">Environmental Data</div>
+              <div className="text-xs space-y-1">
+                <div className="text-gray-300">Radiation: {Math.round(planetData[currentPlanet].radiationLevel * 100)}%</div>
+                <div className="text-gray-300">Type: {planetData[currentPlanet].type}</div>
+                {planetData[currentPlanet].moons.length > 0 && (
+                  <div className="text-yellow-300">Moons: {planetData[currentPlanet].moons.map(m => m.name).join(', ')}</div>
+                )}
+              </div>
+            </div>
+          </div>
+          
+          {/* Helpful tip */}
+          <div className="mt-3 pt-2 border-t border-gray-600 text-center">
+            <div className="text-gray-400 text-xs">Press <span className="text-cyan-400">I</span> to toggle this panel</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default SpaceFlightSimulator;
